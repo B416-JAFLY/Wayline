@@ -30,4 +30,4 @@
 [`generate-firmware-logo.cjs`](../../scripts/generate-firmware-logo.cjs) 生成
 `firmware/assets/boot-logo.rle` 和 `firmware/src/ui_brand.rs`。
 
-生成命令与依赖见[开发指南](../../docs/DEVELOPMENT.md#desktop)。
+生成命令与依赖见[开发指南](../../docs/DEVELOPMENT.zh-CN.md#桌面应用)。
