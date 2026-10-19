@@ -1,0 +1,16 @@
+diff --git a/src/rx.c b/src/rx.c
+index a642612..4a1c00e 100644
+--- a/src/rx.c
++++ b/src/rx.c
+@@ -507,9 +507,9 @@ int awdl_rx(const struct buf *frame, struct buf ***data_frame, struct buf **data
+ 	const struct ieee80211_hdr *ieee80211;
+ 	const struct ether_addr *from, *to;
+ 	uint16_t fc, qosc; /* frame and QoS control */
+-	signed char rssi;
++	signed char rssi = 0; /* Missing signal metadata must not trigger RSSI filtering. */
+ 	uint64_t tsft;
+-	uint8_t flags;
++	uint8_t flags = 0;
+ 
+ 	tsft = 0;
+ 	if (radiotap_parse(frame, &rssi, &flags, &tsft) < 0)

@@ -1,0 +1,50 @@
+[workspace]
+resolver = "2"
+members = [
+    "apps/desktop",
+    "apps/cli",
+    "crates/omdrop-airdrop",
+    "crates/omdrop-board",
+    "crates/omdrop-core",
+    "crates/omdrop-host",
+    "crates/omdrop-flash",
+    "crates/omdrop-net",
+    "crates/omdrop-proto",
+    "crates/omdrop-radio",
+    "crates/omdrop-service",
+    "crates/omdrop-transport",
+]
+# ESP32 uses the Xtensa toolchain and its own lockfile/release profile.
+# Third-party compatibility patches are not workspace members.
+exclude = ["firmware", "vendor/stacksafe-macro"]
+
+[patch.crates-io]
+# Backport upstream macro diagnostics without upgrading GPUI's stacksafe 0.1 runtime.
+# See vendor/stacksafe-macro/README.md for source revisions and removal criteria.
+stacksafe-macro = { path = "vendor/stacksafe-macro" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+
+# Favor speed in the measured archive/compression hot paths.
+# See docs/DEVELOPMENT.md and crates/omdrop-airdrop/examples/archive_bench.rs.
+[profile.release.package.omdrop-airdrop]
+opt-level = 3
+
+[profile.release.package.flate2]
+opt-level = 3
+
+[profile.release.package.miniz_oxide]
+opt-level = 3
+
+[profile.release.package.zlib-rs]
+opt-level = 3
+
+[profile.release.package.adler2]
+opt-level = 3
+
+[profile.release.package.crc32fast]
+opt-level = 3

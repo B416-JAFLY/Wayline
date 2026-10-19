@@ -1,0 +1,21 @@
+# M5Stack Cardputer Adv exposes the ESP32-S3's built-in USB Serial/JTAG CDC,
+# not the UART0 USB bridge expected by the default owl-radio configuration.
+CONFIG_OWL_RADIO_LINK_USB_SERIAL_JTAG=y
+CONFIG_OWL_CARDPUTER_UI=y
+
+# Cardputer Adv has an 8 MiB XMC flash device.
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+
+# The USB Serial/JTAG peripheral is the binary radio link, so don't route
+# ESP-IDF console text onto the same CDC stream.
+CONFIG_ESP_CONSOLE_NONE=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# Keep the same radio/runtime settings as sdkconfig.defaults.
+CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y
+CONFIG_LOG_DEFAULT_LEVEL_WARN=y
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=64
+CONFIG_ESP_WIFI_NVS_ENABLED=n
+CONFIG_FREERTOS_HZ=1000
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y

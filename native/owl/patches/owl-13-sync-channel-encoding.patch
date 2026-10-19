@@ -1,0 +1,27 @@
+diff --git a/src/tx.c b/src/tx.c
+--- a/src/tx.c
++++ b/src/tx.c
+@@ -121,8 +121,12 @@ int awdl_init_sync_params_tlv(uint8_t *buf, const struct awdl_state *state) {
+ 	tlv->reserved = 0;
+ 
+ 	/* TODO: dynamic info needs to be adjusted during runtime */
+-	tlv->next_aw_channel = awdl_chan_num(state->channel.current,
+-	                                     state->channel.enc); /* TODO need to calculate this from current seq */
++	/* master is always stored in OPCLASS form; enc describes the adopted
++	 * sequence/current channel and may change when following a peer. A fixed
++	 * radio stays on master even while advertising that peer's sequence. */
++	tlv->next_aw_channel = state->channel.fixed_radio
++	    ? awdl_chan_num(state->channel.master, AWDL_CHAN_ENC_OPCLASS)
++	    : awdl_chan_num(state->channel.current, state->channel.enc);
+ 	tlv->next_aw_seq = htole16(awdl_sync_current_aw(now, &state->sync));
+ 	tlv->ap_alignment = tlv->next_aw_seq; /* awdl_fill_sync_params(..) */
+ 	tlv->tx_down_counter = htole16(awdl_sync_next_aw_tu(now, &state->sync));
+@@ -129,7 +133,7 @@ int awdl_init_sync_params_tlv(uint8_t *buf, const struct awdl_state *state) {
+ 	tlv->af_period = htole16(state->psf_interval);
+ 	tlv->presence_mode = state->sync.presence_mode; /* always available, usually 4 */
+ 	tlv->master_addr = state->election.master_addr;
+-	tlv->master_channel = awdl_chan_num(state->channel.master, state->channel.enc);
++	tlv->master_channel = awdl_chan_num(state->channel.master, AWDL_CHAN_ENC_OPCLASS);
+ 	/* lower bound is 0 */
+ 	if (le16toh(tlv->aw_com_length) < (le16toh(tlv->aw_period) * tlv->presence_mode - le16toh(tlv->tx_down_counter)))
+ 		tlv->remaining_aw_length = htole16(0);

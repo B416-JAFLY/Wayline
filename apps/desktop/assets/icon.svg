@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     viewBox="288 98 512 512" role="img" aria-labelledby="logo-title logo-description">
+  <title id="logo-title">Omdrop — paired paper transfer mark</title>
+  <desc id="logo-description">Two congruent rounded triangles, one rotated 180 degrees around 544,354. Transparent square application icon with equal side padding.</desc>
+  <defs>
+    <!-- Circular fillets at the three corners have radii 13, 19 and 23.
+         Both pieces reuse this exact path: never edit their silhouettes separately. -->
+    <path id="paper-shape" d="M 448.43707 268.27577 L 732.06421 211.04564 A 19 19 0 0 1 753.34908 237.00589 L 697.10846 371.38027 A 23 23 0 0 1 667.15950 383.77818 L 446.07274 293.04555 A 13 13 0 0 1 448.43707 268.27577 Z"/>
+  </defs>
+  <g id="symbol">
+    <use id="upper-cyan" href="#paper-shape" xlink:href="#paper-shape" fill="#65C7FF"/>
+    <use id="lower-blue" href="#paper-shape" xlink:href="#paper-shape" fill="#0A84FF" transform="rotate(180 544 354)"/>
+  </g>
+
+</svg>

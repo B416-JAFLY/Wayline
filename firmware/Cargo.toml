@@ -1,0 +1,29 @@
+[package]
+name = "owl-radio-rust-link"
+version = "0.1.0"
+edition = "2021"
+description = "Rust OWL radio application with a thin ESP-IDF driver boundary"
+license = "GPL-3.0-only"
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[features]
+cardputer-ui = []
+
+[[example]]
+name = "ui_preview"
+required-features = ["cardputer-ui"]
+
+[dependencies]
+omdrop-proto = { path = "../crates/omdrop-proto", default-features = false }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+
+# CRC/COBS runs once per radio byte; keep the rest of the MCU application small.
+[profile.release.package.omdrop-proto]
+opt-level = 3

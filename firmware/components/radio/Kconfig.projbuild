@@ -1,0 +1,41 @@
+menu "owl-radio"
+
+config OWL_RADIO_LINK_USB_SERIAL_JTAG
+	bool "Use the built-in USB Serial/JTAG port for the radio link"
+	default n
+	help
+		Select this for boards that expose the ESP32-S3 native USB
+		Serial/JTAG CDC port, such as the M5Stack Cardputer Adv. Leave it
+		disabled for boards using UART0 through a USB-UART bridge (CH343,
+		CP210x, or similar).
+
+config OWL_CARDPUTER_UI
+	bool "Enable the Cardputer Adv screen and keyboard UI"
+	default n
+	depends on OWL_RADIO_LINK_USB_SERIAL_JTAG
+	help
+		Adds Rust status, transfer feedback, sharing guidance and preferences
+		pages. M5Unified provides display, keyboard and sound hardware access.
+		The interface runs alongside the binary USB radio link; the host
+		continues to control radio settings.
+
+config OWL_RADIO_BAUD
+	int "UART radio-link baud rate"
+	depends on !OWL_RADIO_LINK_USB_SERIAL_JTAG
+	default 3000000
+	range 115200 5000000
+	help
+		Only used when the radio link uses UART0. USB Serial/JTAG ignores
+		UART baud-rate settings.
+
+config OWL_RX_AGGREGATION
+	bool "Experimental AWDL receive A-MPDU / hardware Block Ack"
+	default n
+	depends on IDF_TARGET_ESP32S3
+	help
+		Accept one AWDL peer/TID with a bounded 16-frame receive window.
+		Uses an internal hardware Block Ack ABI, pinned by archive checksum.
+		Only supports the unassociated STA radio; never use with an AP connection.
+		Requires on-device aggregation, loss and integrity validation before release.
+
+endmenu

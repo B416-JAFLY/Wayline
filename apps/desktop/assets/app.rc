@@ -1,0 +1,4 @@
+// The first icon is used by Explorer and shortcuts. IDs match native.rs.
+1 ICON "assets/icon.ico"
+2 ICON "assets/tray-connected.ico"
+3 ICON "assets/tray-disconnected.ico"

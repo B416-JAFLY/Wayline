@@ -1,0 +1,12 @@
+[package]
+name = "omdrop-airdrop"
+version = "0.1.0"
+edition = "2021"
+description = "Rust AirDrop archive codecs used by omdrop"
+license = "GPL-3.0-only"
+
+[dependencies]
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+
+[dev-dependencies]
+tempfile = "3"

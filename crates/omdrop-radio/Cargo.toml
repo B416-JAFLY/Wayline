@@ -1,0 +1,10 @@
+[package]
+name = "omdrop-radio"
+version = "0.1.0"
+edition = "2021"
+description = "Rust host client for the owl-radio ESP32 link"
+license = "GPL-3.0-only"
+
+[dependencies]
+omdrop-proto = { path = "../omdrop-proto" }
+serialport = "4"

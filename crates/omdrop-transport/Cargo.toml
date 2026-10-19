@@ -1,0 +1,9 @@
+[package]
+name = "omdrop-transport"
+version = "0.1.0"
+edition = "2021"
+description = "Blocking stream transport for the omdrop radio protocol"
+license = "GPL-3.0-only"
+
+[dependencies]
+omdrop-proto = { path = "../omdrop-proto" }
