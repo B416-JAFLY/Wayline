@@ -6,6 +6,14 @@
 
 [English](README.md) · [快速开始](docs/QUICKSTART.zh-CN.md) · [开发指南](docs/DEVELOPMENT.zh-CN.md)
 
+## 工程实现
+
+- **原生桌面与系统集成**：使用 GPUI 构建收发界面，接入托盘、文件右键与资源管理器拖放；普通权限 UI 与高权限服务分离，兼顾桌面交互和设备管理。
+- **Rust 收发核心**：将设备发现、TLS/HTTP 和 CPIO/DVZip 编解码组织为桌面与 CLI 共用的模块，采用流式处理、归档校验和最终确认，支持取消与失败清理。
+- **服务与固件维护**：通过命名管道和会话租约协调多个客户端，管理 OWL 生命周期与串口互斥；烧录期间隔离无线任务，写入后执行镜像校验和启动检查。
+- **嵌入式应用**：使用 Rust 实现 ESP32-S3 应用与 Cardputer 三语言界面，共享无堆分配的 CRC/COBS 协议；C/C++ 层封装硬件驱动，板端显示双向传输状态。
+- **构建与验证**：固定 OWL 源码、补丁和烧录工具版本，校验固件及离线发布包，提供主机回归测试、协议测试和界面预览工具。
+
 ## 界面与收发演示
 
 演示使用实际固件渲染器和模拟传输数据，手机与桌面面板为界面示意。
@@ -67,7 +75,7 @@ scripts/build-release.ps1
 
 感谢以下项目的作者、维护者与贡献者：
 
-- [omdrop-owl-windows](https://github.com/dantdmdarealguy/omdrop-owl-windows)（dantdmdarealguy）：本项目的直接上游，Windows OWL 与 ESP32 无线桥接。
+- [omdrop-owl-windows](https://github.com/dantdmdarealguy/omdrop-owl-windows)（dantdmdarealguy）：Windows 端 OWL 移植、Wintun 集成与 ESP32 无线桥接的实现基础。
 - [omdrop-owl](https://github.com/t4t5/omdrop-owl)（t4t5）：Linux 无线后端与固定信道方案。
 - [omdrop](https://github.com/netmojo-systems/omdrop-plugin)、[omdrop-awdl](https://github.com/netmojo-systems/omdrop-awdl)（Brent Kearney 及贡献者）与 [OpenDrop](https://github.com/seemoo-lab/opendrop)（SEEMOO）：AirDrop 协议与收发实现参考。
 - [OWL / Open Wireless Link](https://github.com/seemoo-lab/owl)（Milan Stute、SEEMOO / TU Darmstadt）与 [jedbillyb/owl](https://github.com/jedbillyb/owl)：用户态 AWDL 实现。

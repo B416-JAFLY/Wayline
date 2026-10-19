@@ -9,6 +9,21 @@ ESP32-C5 and 5 GHz are unsupported.
 
 [中文说明](README.zh-CN.md) · [Quick start](docs/QUICKSTART.md) · [Development guide](docs/DEVELOPMENT.md)
 
+## Engineering
+
+- **Native desktop and Windows integration**: GPUI transfer UI, tray, Explorer context menus
+  and drag-and-drop, with an unelevated UI separated from the privileged service.
+- **Rust transfer core**: discovery, TLS/HTTP and CPIO/DVZip codecs shared by desktop and CLI,
+  with streaming, archive validation, final confirmation, cancellation and failure cleanup.
+- **Service and firmware maintenance**: named pipes and session leases coordinate clients,
+  OWL lifecycle and exclusive serial access. Flashing isolates wireless work and verifies
+  images and device startup before restoring readiness.
+- **Embedded application**: Rust ESP32-S3 application and three-language Cardputer UI,
+  a shared allocation-free CRC/COBS protocol, C/C++ hardware drivers and simultaneous
+  send/receive feedback.
+- **Builds and verification**: pinned OWL sources, patches and flashing tools, verified
+  firmware and offline packages, host regression tests, protocol tests and UI previews.
+
 ## Interface and transfer demos
 
 Demos use the actual firmware renderer with simulated transfers. Phone and desktop panels
@@ -85,7 +100,7 @@ packaging are covered in the [development guide](docs/DEVELOPMENT.md).
 Thanks to the authors, maintainers and contributors of:
 
 - [omdrop-owl-windows](https://github.com/dantdmdarealguy/omdrop-owl-windows) (dantdmdarealguy):
-  this project's direct upstream, Windows OWL and ESP32 radio bridge.
+  implementation foundation for the Windows OWL port, Wintun integration and ESP32 radio bridge.
 - [omdrop-owl](https://github.com/t4t5/omdrop-owl) (t4t5): Linux radio backend and fixed-channel approach.
 - [omdrop](https://github.com/netmojo-systems/omdrop-plugin),
   [omdrop-awdl](https://github.com/netmojo-systems/omdrop-awdl) (Brent Kearney and contributors)
