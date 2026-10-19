@@ -1,4 +1,4 @@
-# omdrop-owl-windows
+# omdrop-windows
 
 AirDrop between Windows and Apple devices, with a USB-attached ESP32 as the Wi-Fi radio.
 

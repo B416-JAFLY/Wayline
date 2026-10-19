@@ -1,4 +1,4 @@
-# omdrop-owl-windows
+# omdrop-windows
 
 通过 USB 连接的 ESP32 在 Windows 与 Apple 设备之间收发 AirDrop 文件。桌面应用、AirDrop 核心、服务管理和固件应用使用 Rust，AWDL 由 OWL 提供，硬件驱动使用 ESP-IDF 和 M5Unified。
 
