@@ -24,6 +24,23 @@ const POLL: Duration = Duration::from_millis(100);
 const BATCH_BYTES: usize = 4096;
 const BATCH_FRAMES: usize = 8;
 
+struct SerialReader(Box<dyn serialport::SerialPort>);
+
+impl Read for SerialReader {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+        let available = self.0.bytes_to_read().map_err(io::Error::other)? as usize;
+        if available == 0 {
+            thread::sleep(Duration::from_millis(2));
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        let length = available.min(buffer.len());
+        self.0.read(&mut buffer[..length])
+    }
+}
+
 struct Pending {
     request: u8,
     expected: u8,
@@ -210,7 +227,7 @@ impl Radio {
             .map_err(io::Error::other)?;
         port.write_request_to_send(false)
             .map_err(io::Error::other)?;
-        let reader = port.try_clone().map_err(io::Error::other)?;
+        let reader = SerialReader(port.try_clone().map_err(io::Error::other)?);
         let radio = Self::start(reader, port, channel)?;
         let hello = radio.initialize(channel).await?;
         Ok((radio, hello))
