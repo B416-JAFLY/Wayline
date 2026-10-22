@@ -1241,7 +1241,7 @@ impl Capsule {
             manifest_path,
             tool_path,
             port: self.firmware.selected.clone().unwrap(),
-            board: omdrop_flash::SUPPORTED_BOARD.into(),
+            board: self.firmware.package.as_ref().unwrap().board.clone(),
             mode: self.firmware.mode,
         };
         self.firmware_worker = Some(crate::firmware::start(
@@ -1268,9 +1268,24 @@ impl Capsule {
                         div()
                             .text_size(px(13.))
                             .font_weight(FontWeight::MEDIUM)
-                            .child("Cardputer Adv"),
+                            .child(self.firmware.package.as_ref().map_or_else(
+                                || "固件安装".to_string(),
+                                |package| package.board.clone(),
+                            )),
                     )
-                    .child(firmware_hint("ESP32-S3 · 8 MiB", MUTED))
+                    .child(firmware_hint(
+                        self.firmware.package.as_ref().map_or_else(
+                            || "未找到可用的固件包".to_string(),
+                            |package| {
+                                format!(
+                                    "{} · {} MiB",
+                                    package.chip,
+                                    package.flash_size / (1024 * 1024)
+                                )
+                            },
+                        ),
+                        MUTED,
+                    ))
                     .child(firmware_hint(
                         format!(
                             "固件包：{} · 设备版本：未知",
@@ -1593,7 +1608,7 @@ impl Capsule {
                                 .min_w_0()
                                 .text_size(px(11.))
                                 .whitespace_normal()
-                                .child("我已确认设备是 Cardputer Adv"),
+                                .child("我已确认设备板型、芯片和 Flash 容量与上方固件包匹配"),
                         )
                         .on_click(cx.listener(|this, _, _, cx| {
                             if !this.firmware.busy {

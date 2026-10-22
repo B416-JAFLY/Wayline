@@ -5,7 +5,7 @@ use omdrop_flash::{
 use std::{sync::mpsc::Sender, thread::JoinHandle};
 
 pub enum Event {
-    Inventory(Result<(Vec<Device>, String), String>),
+    Inventory(Result<(Vec<Device>, omdrop_flash::Manifest), String>),
     Progress(FlashEvent),
     Done(Result<FlashReport, omdrop_flash::FlashError>),
 }
@@ -18,6 +18,7 @@ pub struct Model {
     pub board_confirmed: bool,
     pub mode: InstallMode,
     pub version: Option<String>,
+    pub package: Option<omdrop_flash::Manifest>,
     pub busy: bool,
     pub cancelling: bool,
     pub confirm_exit: bool,
@@ -37,6 +38,7 @@ impl Default for Model {
             board_confirmed: false,
             mode: InstallMode::Reinstall,
             version: None,
+            package: None,
             busy: false,
             cancelling: false,
             confirm_exit: false,
@@ -76,6 +78,7 @@ impl Model {
             && !transfer_active
             && self.board_confirmed
             && self.version.is_some()
+            && self.package.is_some()
             && self
                 .selected
                 .as_ref()
@@ -86,7 +89,17 @@ impl Model {
             Event::Inventory(result) => {
                 self.loading = false;
                 match result {
-                    Ok((devices, version)) => {
+                    Ok((devices, package)) => {
+                        if self.package.as_ref().is_none_or(|previous| {
+                            previous.board != package.board
+                                || previous.chip != package.chip
+                                || previous.flash_size != package.flash_size
+                                || previous.layout_id != package.layout_id
+                                || previous.firmware_version != package.firmware_version
+                        }) {
+                            self.board_confirmed = false;
+                            self.ready = false;
+                        }
                         if !devices
                             .iter()
                             .any(|d| Some(&d.port) == self.selected.as_ref())
@@ -96,11 +109,15 @@ impl Model {
                             self.ready = false;
                         }
                         self.devices = devices;
-                        self.version = Some(version);
+                        self.version = Some(package.firmware_version.clone());
+                        self.package = Some(package);
                         self.error = None;
                     }
                     Err(error) => {
                         self.version = None;
+                        self.package = None;
+                        self.board_confirmed = false;
+                        self.ready = false;
                         self.error = Some(error);
                     }
                 }
@@ -162,10 +179,7 @@ pub fn refresh(events: Sender<crate::backend::Event>) {
     std::thread::spawn(move || {
         let result = (|| -> anyhow::Result<_> {
             let package = omdrop_flash::validate_package(&omdrop_flash::installed_manifest()?)?;
-            Ok((
-                omdrop_flash::enumerate_devices()?,
-                package.manifest.firmware_version,
-            ))
+            Ok((omdrop_flash::enumerate_devices()?, package.manifest))
         })()
         .map_err(|error| format!("{error:#}"));
         let _ = events.send(crate::backend::Event::Firmware(Event::Inventory(result)));
@@ -196,10 +210,26 @@ pub fn start(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn package() -> omdrop_flash::Manifest {
+        omdrop_flash::Manifest {
+            format_version: 1,
+            board: "cardputer-adv".into(),
+            chip: "esp32s3".into(),
+            flash_size: 8 * 1024 * 1024,
+            firmware_version: "test".into(),
+            source_revision: "test".into(),
+            protocol_version: 2,
+            idf_version: "6.0".into(),
+            layout_id: "test".into(),
+            tool_version: "5.0.2".into(),
+            images: vec![],
+        }
+    }
     #[test]
     fn no_install_without_explicit_device_board_and_idle_transfers() {
         let mut model = Model {
             version: Some("test".into()),
+            package: Some(package()),
             ..Default::default()
         };
         assert!(!model.can_start(false));
@@ -292,8 +322,37 @@ mod tests {
             board_confirmed: true,
             ..Default::default()
         };
-        model.apply(Event::Inventory(Ok((vec![], "test".into()))));
+        model.apply(Event::Inventory(Ok((vec![], package()))));
         assert!(model.selected.is_none());
         assert!(!model.board_confirmed);
+    }
+
+    #[test]
+    fn changed_package_and_inventory_failure_clear_confirmation() {
+        let mut model = Model {
+            selected: Some("COM9".into()),
+            board_confirmed: true,
+            ready: true,
+            package: Some(package()),
+            ..Default::default()
+        };
+        let mut updated = package();
+        updated.board = "esp32c5".into();
+        updated.chip = "esp32c5".into();
+        model.apply(Event::Inventory(Ok((
+            vec![Device {
+                port: "COM9".into(),
+                label: "ESP32".into(),
+            }],
+            updated,
+        ))));
+        assert!(!model.board_confirmed);
+        assert!(!model.ready);
+        assert_eq!(model.package.as_ref().unwrap().chip, "esp32c5");
+        model.board_confirmed = true;
+        model.apply(Event::Inventory(Err("missing package".into())));
+        assert!(model.package.is_none());
+        assert!(!model.board_confirmed);
+        assert!(!model.can_start(false));
     }
 }
