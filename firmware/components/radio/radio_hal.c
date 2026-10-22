@@ -82,7 +82,7 @@ void owl_hal_config_unlock(void) { xSemaphoreGive(config_lock); }
 #if CONFIG_IDF_TARGET_ESP32C5
 static esp_err_t configure_c5_tx_rate(void)
 {
-	/* ESP-IDF 6.0 requires this fixed C5 PHY/rate configuration before start.
+	/* The C5 driver needs the STA context created by esp_wifi_start().
 	 * HE20/MCS0 works on both bands; host per-frame rates are ignored. */
 	wifi_tx_rate_config_t config = {
 		.phymode = WIFI_PHY_MODE_HE20,
@@ -164,11 +164,9 @@ void owl_hal_radio_init(uint8_t mac[6])
 	ESP_ERROR_CHECK(esp_wifi_init(&config));
 	ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
 	ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-#if CONFIG_IDF_TARGET_ESP32C5
-	ESP_ERROR_CHECK(configure_c5_tx_rate());
-#endif
 	ESP_ERROR_CHECK(esp_wifi_start());
 #if CONFIG_IDF_TARGET_ESP32C5
+	ESP_ERROR_CHECK(configure_c5_tx_rate());
 	ESP_ERROR_CHECK(esp_wifi_set_band_mode(WIFI_BAND_MODE_2G_ONLY));
 #endif
 	ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
@@ -270,13 +268,12 @@ int32_t owl_hal_set_mac(const uint8_t mac[6], uint8_t actual_mac[6], uint8_t cha
 #endif
 	esp_wifi_stop();
 	esp_err_t err = esp_wifi_set_mac(WIFI_IF_STA, mac);
-#if CONFIG_IDF_TARGET_ESP32C5
-	ESP_ERROR_CHECK(configure_c5_tx_rate());
-#else
+#if !CONFIG_IDF_TARGET_ESP32C5
 	current_rate = -1; /* Restarting Wi-Fi resets the driver's rate selection. */
 #endif
 	ESP_ERROR_CHECK(esp_wifi_start());
 #if CONFIG_IDF_TARGET_ESP32C5
+	ESP_ERROR_CHECK(configure_c5_tx_rate());
 	ESP_ERROR_CHECK(esp_wifi_set_band_mode(current_channel == 6 ? WIFI_BAND_MODE_2G_ONLY
 	                                                          : WIFI_BAND_MODE_5G_ONLY));
 #endif
