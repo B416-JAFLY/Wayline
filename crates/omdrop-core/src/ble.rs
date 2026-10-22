@@ -37,7 +37,9 @@ pub struct AirDropAdvert {
 impl AirDropAdvert {
     pub fn start(legacy_shape: bool) -> Result<Self, SendError> {
         let apartment = Apartment::enter()?;
-        let payload = continuity_payload(legacy_shape);
+        let mut tag = [0; 3];
+        getrandom::fill(&mut tag).map_err(|e| SendError::invalid(format!("BLE tag: {e}")))?;
+        let payload = continuity_payload(legacy_shape, tag);
 
         // Release temporary WinRT objects before the apartment can be dropped on
         // a later publisher startup error.
@@ -91,16 +93,12 @@ impl AirDropAdvert {
     }
 }
 
-fn continuity_payload(legacy_shape: bool) -> [u8; 20] {
-    let body: [u8; 18] = if legacy_shape {
-        [0, 0, 0, 0, 0, 0, 0, 0, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-    } else {
-        [0x40, 0, 0, 0, 0, 0, 0, 0, 0x03, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-    };
-    let mut payload = [0u8; 20];
-    payload[0] = 0x05;
-    payload[1] = body.len() as u8;
-    payload[2..].copy_from_slice(&body);
+fn continuity_payload(legacy_shape: bool, tag: [u8; 3]) -> Vec<u8> {
+    let mut payload = owly_airdrop::proto::ble::Advert::anonymous(tag).manufacturer_data();
+    if legacy_shape {
+        payload[2..6].fill(0);
+        payload[10] = 1;
+    }
     payload
 }
 
@@ -116,12 +114,12 @@ mod tests {
 
     #[test]
     fn continuity_payload_matches_current_and_legacy_airdrop_shapes() {
-        let current = continuity_payload(false);
+        let current = continuity_payload(false, [0; 3]);
         assert_eq!(&current[..2], &[0x05, 18]);
         assert_eq!(&current[2..10], &[0x40, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(&current[10..], &[0x03, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 
-        let legacy = continuity_payload(true);
+        let legacy = continuity_payload(true, [0; 3]);
         assert_eq!(&legacy[..2], &[0x05, 18]);
         assert_eq!(&legacy[2..10], &[0; 8]);
         assert_eq!(&legacy[10..], &[0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0]);

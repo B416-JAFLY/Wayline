@@ -343,6 +343,7 @@ fn receive(
     };
     let mut options = ReceiverOptions::new(name, &args.model, &save);
     options.accept_all = args.accept_all;
+    options.decision_timeout = args.decision_timeout;
     options.allow_dvzip_archive_boundary = interface.is_some();
     let service_id = if interface.is_some() {
         let advertisement =

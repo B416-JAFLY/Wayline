@@ -1,6 +1,6 @@
 # omdrop-windows
 
-通过 USB 连接的 ESP32，在 Windows 与 Apple 设备之间收发 AirDrop 文件。桌面应用、服务、AirDrop 核心和固件使用 Rust，AWDL 由 OWL 提供。
+通过 USB 连接的 ESP32，在 Windows 与 Apple 设备之间收发 AirDrop 文件。桌面应用、服务、AirDrop 核心和固件使用 Rust，AWDL 由 Owly Rust 桥接程序提供；AirDrop 协议和状态机统一使用 owly-airdrop。
 
 支持 Windows 10/11 x64 和 M5Stack Cardputer Adv（ESP32-S3、原生 USB Serial/JTAG、2.4 GHz 信道 6）。电脑需要蓝牙 LE 广播能力，Wi-Fi 收发由 ESP32 承担。
 
@@ -12,9 +12,9 @@
 
 - **原生桌面与系统集成**：使用 GPUI 构建收发界面，接入托盘、文件右键与资源管理器拖放；普通权限 UI 与高权限服务分离，兼顾桌面交互和设备管理。
 - **Rust 收发核心**：将设备发现、TLS/HTTP 和 CPIO/DVZip 编解码组织为桌面与 CLI 共用的模块，采用流式处理、归档校验和最终确认，支持取消与失败清理。
-- **服务与固件维护**：通过命名管道和会话租约协调多个客户端，管理 OWL 生命周期与串口互斥；烧录期间隔离无线任务，写入后执行镜像校验和启动检查。
+- **服务与固件维护**：通过命名管道和会话租约协调多个客户端，管理无线后端生命周期与串口互斥；烧录期间隔离无线任务，写入后执行镜像校验和启动检查。
 - **嵌入式应用**：使用 Rust 实现 ESP32-S3 应用与 Cardputer 三语言界面，共享无堆分配的 CRC/COBS 协议；C/C++ 层封装硬件驱动，板端显示双向传输状态。无屏幕的 ESP32-C5 构建复用同一协议层。
-- **构建与验证**：固定 OWL 源码、补丁和烧录工具版本，校验固件及离线发布包，提供主机回归测试、协议测试和界面预览工具。
+- **构建与验证**：固定 Owly 源码、适配和烧录工具版本，校验固件及离线发布包，提供主机回归测试、协议测试和界面预览工具。
 
 ## 界面与收发演示
 
@@ -54,23 +54,26 @@
 准备[开发环境](docs/DEVELOPMENT.zh-CN.md#构建与测试)后，从仓库根目录的 PowerShell 执行：
 
 ```powershell
-scripts/build-owl.ps1
 scripts/build-release.ps1
 ```
 
-输出位于 `native/owl/build` 和 `target/release`。开发者安装使用管理员终端运行 `scripts/install-service.ps1`；固件构建（含无屏幕的 ESP32-C5 构建）、测试和离线打包见[开发指南](docs/DEVELOPMENT.zh-CN.md)。
+输出位于 `target/release`，包含默认的 `omdrop-bridge.exe` 和经过校验的 Wintun。开发者安装使用管理员终端运行 `scripts/install-service.ps1`；固件构建（含无屏幕的 ESP32-C5 构建）、测试和离线打包见[开发指南](docs/DEVELOPMENT.zh-CN.md)。
+
+单独构建 Rust AWDL 后端：`scripts/build-bridge.ps1 -Test`。
+它使用现有 ESP32 固件协议和 Wintun，已设为源码及发布包默认，尚待设备互通验收。
+构建及运行方式见[开发指南](docs/DEVELOPMENT.zh-CN.md#rust-awdl-后端)。
 
 ## 目录结构
 
 | 路径 | 内容 |
 | --- | --- |
 | `apps/desktop`、`apps/cli` | GPUI 桌面与命令行入口 |
-| `crates/omdrop-service` | 服务、OWL 管理、会话与维护 |
+| `apps/bridge`、`crates/omdrop-awdl` | Rust AWDL 子进程、ESP32 串口与 Wintun 适配 |
+| `vendor/owly-awdl`、`vendor/owly-airdrop` | 固定版本的 AWDL 与 AirDrop 协议实现 |
+| `crates/omdrop-service` | 服务、无线后端管理、会话与维护 |
 | `crates/omdrop-core`、`crates/omdrop-host`、`crates/omdrop-flash` | 文件收发、共用设置与固件操作 |
-| `crates/omdrop-airdrop`、`crates/omdrop-net` | 归档与网络编解码 |
 | `crates/omdrop-proto`、`crates/omdrop-board`、`crates/omdrop-radio`、`crates/omdrop-transport` | 共享协议、板端反馈与通信适配 |
 | `firmware` | 独立 Rust/ESP-IDF 固件项目，硬件接口位于 `firmware/components/radio` |
-| `native/owl` | Windows OWL、固定版本与补丁 |
 | `scripts`、`tests`、`assets/branding` | 构建、诊断与[品牌资源](assets/branding/README.md) |
 
 ## 鸣谢

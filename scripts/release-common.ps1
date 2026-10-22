@@ -73,21 +73,47 @@ function Get-PackageFiles([string]$Root) {
     }
 }
 
-function Get-OwlReleaseMetadata([string]$Root) {
-    $pins = Get-Content -LiteralPath (Join-Path $Root 'native/owl/pins') -Raw
-    $revision = [regex]::Match($pins, '(?m)^OWL_COMMIT=([0-9a-f]{40})\s*$')
-    if (-not $revision.Success) { throw 'Missing pinned OWL revision.' }
-    $patches = @()
-    foreach ($patch in Get-ChildItem -LiteralPath (Join-Path $Root 'native/owl/patches') -Filter '*.patch' -File | Sort-Object Name) {
-        $patches += [ordered]@{ path = $patch.Name; sha256 = (Get-FileHash -LiteralPath $patch.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
+function Get-BridgeReleaseMetadata([string]$Root) {
+    $build = Join-Path $Root 'target/release'
+    $recordPath = Join-Path $build 'omdrop-bridge-build.json'
+    $record = Get-Content -LiteralPath $recordPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($record.schemaVersion -ne 1 -or $record.profile -ne 'release' -or
+        $record.upstreamRevision -ne '2e9b2b0228432d5e402a9c90a031b419960d0bd1' -or
+        $record.sourceRevision -notmatch '^[0-9a-f]{40}$' -or @($record.sources).Count -eq 0) {
+        throw 'Build the pinned Rust bridge with scripts/build-bridge.ps1 first.'
+    }
+    foreach ($entry in $record.sources) {
+        $path = Resolve-PackageFile $Root $entry.path
+        if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ine $entry.sha256) {
+            throw "Bridge source changed after build: $($entry.path)"
+        }
+    }
+    if ((Get-FileHash -LiteralPath (Join-Path $build 'omdrop-bridge.exe') -Algorithm SHA256).Hash -ine $record.executableSha256 -or
+        (Get-FileHash -LiteralPath (Join-Path $build 'wintun.dll') -Algorithm SHA256).Hash -ine $record.wintunSha256 -or
+        (Get-FileHash -LiteralPath (Join-Path $Root 'Cargo.lock') -Algorithm SHA256).Hash -ine $record.cargoLockSha256) {
+        throw 'Bridge binaries or Cargo.lock changed after build.'
     }
     return [ordered]@{
-        sourceRevision = $revision.Groups[1].Value
-        pinsSha256 = (Get-FileHash -LiteralPath (Join-Path $Root 'native/owl/pins') -Algorithm SHA256).Hash.ToLowerInvariant()
-        patches = $patches
-        executableSha256 = (Get-FileHash -LiteralPath (Join-Path $Root 'native/owl/build/owl.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
-        wintunSha256 = (Get-FileHash -LiteralPath (Join-Path $Root 'native/owl/build/wintun.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
+        sourceRevision = $record.sourceRevision
+        upstreamRevision = $record.upstreamRevision
+        executableSha256 = $record.executableSha256
+        wintunSha256 = $record.wintunSha256
+        buildRecordSha256 = (Get-FileHash -LiteralPath $recordPath -Algorithm SHA256).Hash.ToLowerInvariant()
     }
+}
+
+function Get-AirDropReleaseMetadata([string]$Root) {
+    $sources = @()
+    foreach ($directory in @('crates/omdrop-core/src', 'vendor/owly-airdrop/src')) {
+        $sources += @(Get-ChildItem -LiteralPath (Join-Path $Root $directory) -File -Recurse)
+    }
+    foreach ($file in @('Cargo.toml','Cargo.lock','crates/omdrop-core/Cargo.toml','vendor/owly-airdrop/Cargo.toml','vendor/owly-airdrop/LICENSE')) {
+        $sources += Get-Item -LiteralPath (Join-Path $Root $file)
+    }
+    $entries = @($sources | Sort-Object FullName | ForEach-Object {
+        [ordered]@{ path = $_.FullName.Substring($Root.Length + 1).Replace('\', '/'); sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
+    })
+    return [ordered]@{ upstreamRevision = '2e9b2b0228432d5e402a9c90a031b419960d0bd1'; sources = $entries }
 }
 
 function Test-FirmwarePackage([string]$Root) {
@@ -156,7 +182,7 @@ function Test-ReleasePackage([string]$Root) {
     $manifestPath = Resolve-PackageFile $Root 'release.json'
     if ((Get-Item -LiteralPath $manifestPath).Length -gt 1048576) { throw 'Release manifest is too large.' }
     $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($manifest.schemaVersion -ne 1 -or $manifest.platform -ne 'windows-x64' -or
+    if ($manifest.schemaVersion -ne 2 -or $manifest.platform -ne 'windows-x64' -or
         $manifest.runtime -notin @('Desktop', 'Rust', 'Cli') -or -not $manifest.version -or
         $manifest.sourceRevision -notmatch '^[0-9a-f]{40}$' -or @($manifest.files).Count -eq 0) {
         throw 'Unsupported release manifest.'
@@ -177,10 +203,29 @@ function Test-ReleasePackage([string]$Root) {
     $requiredFiles = @($binary, 'LICENSE', 'licenses/dependencies.json', 'QUICKSTART.zh-CN.md',
         'vcruntime140.dll', 'msvcp140.dll', 'licenses/visual-cpp-Redist.txt')
     if ($manifest.runtime -ne 'Cli') {
-        $requiredFiles += @('owl.exe', 'wintun.dll', 'install.cmd', 'scripts/install-prebuilt.ps1', 'scripts/release-common.ps1', 'scripts/set-service-access.ps1')
+        $requiredFiles += @('wintun.dll', 'install.cmd', 'scripts/install-prebuilt.ps1', 'scripts/release-common.ps1', 'scripts/set-service-access.ps1')
+        if ($manifest.schemaVersion -eq 2) {
+            if ($manifest.radioBackend -ne 'rust') { throw 'Unsupported default radio backend.' }
+            $requiredFiles += @('omdrop-bridge.exe', 'omdrop-bridge-build.json', 'licenses/owly-LICENSE.txt', 'licenses/wintun-LICENSE.txt')
+        }
     }
     foreach ($required in $requiredFiles) {
         if (-not $seen.ContainsKey($required)) { throw "Missing release file: $required" }
+    }
+    if ($manifest.runtime -ne 'Cli' -and $manifest.schemaVersion -eq 2) {
+        $recordPath = Resolve-PackageFile $Root 'omdrop-bridge-build.json'
+        $record = Get-Content -LiteralPath $recordPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $bridge = $manifest.bridge
+        if ($record.schemaVersion -ne 1 -or $record.profile -ne 'release' -or
+            $record.sourceRevision -ne $manifest.sourceRevision -or $bridge.sourceRevision -ne $manifest.sourceRevision -or
+            $record.upstreamRevision -ne '2e9b2b0228432d5e402a9c90a031b419960d0bd1' -or
+            $record.upstreamRevision -ne $bridge.upstreamRevision -or
+            $record.executableSha256 -ine $bridge.executableSha256 -or $record.wintunSha256 -ine $bridge.wintunSha256 -or
+            (Get-FileHash -LiteralPath $recordPath -Algorithm SHA256).Hash -ine $bridge.buildRecordSha256 -or
+            (Get-FileHash -LiteralPath (Join-Path $Root 'omdrop-bridge.exe') -Algorithm SHA256).Hash -ine $bridge.executableSha256 -or
+            (Get-FileHash -LiteralPath (Join-Path $Root 'wintun.dll') -Algorithm SHA256).Hash -ine $bridge.wintunSha256) {
+            throw 'Rust bridge provenance does not match the release.'
+        }
     }
     if ($manifest.runtime -eq 'Desktop') {
         foreach ($required in @('firmware/manifest.json', 'tools/esptool/esptool.exe', 'QUICKSTART.zh-CN.md')) {
@@ -197,6 +242,27 @@ function Test-ReleasePackage([string]$Root) {
     return $manifest
 }
 
+function Assert-InstallBridgeConfiguration([string]$ConfigPath, [string]$PackageRoot, [string]$InstallRoot) {
+    $configuredPath = $null
+    if (Test-Path -LiteralPath $ConfigPath -PathType Leaf) {
+        $config = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($config.PSObject.Properties['bridgePath']) { $configuredPath = $config.bridgePath }
+    }
+    if ([string]::IsNullOrEmpty($configuredPath)) {
+        if (-not (Test-Path -LiteralPath (Join-Path $PackageRoot 'omdrop-bridge.exe') -PathType Leaf)) {
+            throw 'The Rust bridge is missing from the package.'
+        }
+        return
+    }
+    if (-not [IO.Path]::IsPathRooted($configuredPath)) { throw 'Configured bridge executable path must be absolute.' }
+    $install = [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+    $path = [IO.Path]::GetFullPath($configuredPath)
+    if ($path.StartsWith($install, [StringComparison]::OrdinalIgnoreCase)) {
+        $null = Resolve-PackageFile $PackageRoot $path.Substring($install.Length)
+    } elseif (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        throw "Configured bridge executable does not exist: $path"
+    }
+}
 function Assert-InstallChild([string]$Parent, [string]$Target) {
     $parentPath = [IO.Path]::GetFullPath($Parent).TrimEnd('\', '/')
     $targetPath = [IO.Path]::GetFullPath($Target).TrimEnd('\', '/')

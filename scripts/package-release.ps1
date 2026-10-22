@@ -18,7 +18,12 @@ $files = @{}
 $generated = @{}
 $dependencies = New-Object 'System.Collections.Generic.List[object]'
 $hostRecord = Get-Content -LiteralPath (Join-Path $root 'target/release/omdrop-build.json') -Raw | ConvertFrom-Json
-if ($hostRecord.schemaVersion -ne 1) { throw 'Run scripts/build-release.ps1 before packaging.' }
+if ($hostRecord.schemaVersion -ne 2 -or $hostRecord.radioBackend -ne 'rust') { throw 'Run scripts/build-release.ps1 before packaging.' }
+$airdrop = Get-AirDropReleaseMetadata $root
+if (($airdrop | ConvertTo-Json -Depth 6 -Compress) -cne ($hostRecord.airdrop | ConvertTo-Json -Depth 6 -Compress)) {
+    throw 'AirDrop protocol sources changed after the recorded build; rebuild the release.'
+}
+$generated['licenses/owly-airdrop-source.json'] = $airdrop | ConvertTo-Json -Depth 6
 function Add-ReleaseFile([string]$Source, [string]$Target) {
     if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) { throw "Missing release input: $Source" }
     if ($files.ContainsKey($Target)) { throw "Duplicate release target: $Target" }
@@ -61,6 +66,7 @@ function Add-CargoLicenses([string]$ManifestPath, [string]$Scope, [string]$Platf
 
 $binary = switch ($Runtime) { 'Desktop' { 'omdrop-desktop' } 'Rust' { 'omdrop-service' } 'Cli' { 'omdrop-cli' } }
 $binaries = @($binary)
+if ($Runtime -ne 'Cli') { $binaries += 'omdrop-bridge' }
 if ($IncludeCli -and $Runtime -ne 'Cli') { $binaries += 'omdrop-cli' }
 foreach ($name in $binaries) {
     $source = Join-Path $root "target/release/$name.exe"
@@ -116,24 +122,18 @@ foreach ($dll in Get-ChildItem -LiteralPath $VCRuntimeDirectory -Filter '*.dll' 
 Add-ReleaseFile $VCRuntimeNotice 'licenses/visual-cpp-Redist.txt'
 $vcVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $VCRuntimeDirectory 'vcruntime140.dll')).FileVersion
 $dependencies.Add([ordered]@{ scope = 'host'; name = 'Microsoft Visual C++ Runtime'; version = $vcVersion; license = $null; source = $null; texts = @('licenses/visual-cpp-Redist.txt') })
-$owl = $null
+$bridge = $null
 if ($Runtime -ne 'Cli') {
-Add-ReleaseFile (Join-Path $root 'native/owl/build/owl.exe') 'owl.exe'
-Add-ReleaseFile (Join-Path $root 'native/owl/build/wintun.dll') 'wintun.dll'
-Add-ReleaseFile (Join-Path $root 'native/owl/pins') 'licenses/owl-pins.txt'
+Add-ReleaseFile (Join-Path $root 'target/release/wintun.dll') 'wintun.dll'
+Add-ReleaseFile (Join-Path $root 'target/release/omdrop-bridge-build.json') 'omdrop-bridge-build.json'
+Add-ReleaseFile (Join-Path $root 'vendor/owly-awdl/LICENSE') 'licenses/owly-LICENSE.txt'
 foreach ($script in @('install-prebuilt.ps1', 'release-common.ps1', 'set-service-access.ps1')) { Add-ReleaseFile (Join-Path $PSScriptRoot $script) "scripts/$script" }
 Add-ReleaseFile (Join-Path $PSScriptRoot 'install.cmd') 'install.cmd'
-$owl = Get-OwlReleaseMetadata $root
-if (($owl | ConvertTo-Json -Depth 6 -Compress) -cne ($hostRecord.owl | ConvertTo-Json -Depth 6 -Compress)) {
-    throw 'OWL binaries, pins or patches changed after the recorded host build; rebuild the matching release.'
+$bridge = Get-BridgeReleaseMetadata $root
+if (($bridge | ConvertTo-Json -Depth 6 -Compress) -cne ($hostRecord.bridge | ConvertTo-Json -Depth 6 -Compress)) {
+    throw 'Rust bridge changed after the recorded host build; rebuild the matching release.'
 }
-# Include upstream license texts and notices, not only the host project's license.
-$owlLicenses = @(Get-ChildItem -LiteralPath (Join-Path $root '.cache/upstream/owl') -File | Where-Object { $_.Name -match '^(LICENSE|COPYING|NOTICE)' })
-if (-not $owlLicenses) { throw 'OWL source licenses are missing; build OWL first.' }
-foreach ($license in $owlLicenses) { Add-ReleaseFile $license.FullName "licenses/owl-$($license.Name)" }
-$wintunLicense = Get-ChildItem -LiteralPath (Join-Path $root '.cache') -Filter 'LICENSE.txt' -Recurse -File | Where-Object { $_.FullName -match 'wintun' } | Select-Object -First 1
-if (-not $wintunLicense) { throw 'Wintun license is missing from its verified download.' }
-Add-ReleaseFile $wintunLicense.FullName 'licenses/wintun-LICENSE.txt'
+Add-ReleaseFile (Join-Path $root 'target/release/bridge-licenses/Wintun-LICENSE.txt') 'licenses/wintun-LICENSE.txt'
 }
 $firmware = $null
 $tool = $null
@@ -196,7 +196,7 @@ foreach ($relative in $generated.Keys | Sort-Object) {
     [IO.File]::WriteAllText($target, $generated[$relative], [Text.UTF8Encoding]::new($false))
     $entries += [ordered]@{ path = $relative; length = (Get-Item -LiteralPath $target).Length; sha256 = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant() }
 }
-$manifest = [ordered]@{ schemaVersion = 1; platform = 'windows-x64'; runtime = $Runtime; version = $Version; sourceRevision = $sourceRevision; owl = $owl; vcRuntimeVersion = $vcVersion; firmwareVersion = $(if ($firmware) { $firmware.firmwareVersion } else { $null }); toolVersion = $(if ($tool) { $tool.version } else { $null }); files = $entries }
+$manifest = [ordered]@{ schemaVersion = 2; platform = 'windows-x64'; runtime = $Runtime; version = $Version; sourceRevision = $sourceRevision; radioBackend = 'rust'; bridge = $bridge; vcRuntimeVersion = $vcVersion; firmwareVersion = $(if ($firmware) { $firmware.firmwareVersion } else { $null }); toolVersion = $(if ($tool) { $tool.version } else { $null }); files = $entries }
 [IO.File]::WriteAllText((Join-Path $OutputDirectory 'release.json'), ($manifest | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
 $null = Test-ReleasePackage $OutputDirectory
 Write-Host "Offline package ready: $OutputDirectory"

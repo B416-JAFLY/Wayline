@@ -25,17 +25,16 @@ consult the [development guide](docs/DEVELOPMENT.md) for implementation details.
 | --- | --- |
 | `apps/desktop` | GPUI desktop, tray, Explorer integration, transfer UI and service lifecycle |
 | `apps/cli` | AirDrop command-line entry point |
-| `crates/omdrop-service` | Windows service, OWL child processes, configuration, named pipes and firewall |
+| `crates/omdrop-service` | Windows service, the Rust bridge child processes, configuration, named pipes and firewall |
 | `crates/omdrop-core` | Discovery, BLE wake-up, TLS, sending and receiving |
-| `crates/omdrop-airdrop` | CPIO, gzip, DVZip and plist |
-| `crates/omdrop-net` | DNS/mDNS and HTTP codecs |
+| `vendor/owly-airdrop` | Pinned AirDrop state machines, HTTP/plist/mDNS and archive codecs |
+| `vendor/owly-awdl` | Pinned AWDL state machine and host driver |
 | `crates/omdrop-proto` | Shared host/firmware CRC/COBS protocol and C protocol header |
 | `crates/omdrop-board` | Transfer status feedback to the board |
 | `crates/omdrop-radio`, `crates/omdrop-transport` | Serial diagnostics and transport adapters |
 | `firmware` | Independent Cargo/ESP-IDF project: ESP32 application, UI, audio and assets |
 | `firmware/components/radio` | C/C++ hardware interfaces for ESP-IDF/M5Unified |
-| `native/owl` | OWL Windows/USB/Wintun integration and C regression tests |
-| `native/owl/patches`, `native/owl/pins` | Upstream patches and pinned revisions |
+| `apps/bridge`, `crates/omdrop-awdl` | Rust bridge process, ESP32 serial, Wintun and board feedback |
 | `scripts`, `tests` | Build/install scripts and Python diagnostics |
 
 The root Cargo workspace contains Windows applications and shared libraries. `firmware` has
@@ -46,15 +45,15 @@ its own `Cargo.toml`, `Cargo.lock` and Xtensa build configuration; build and val
 - The desktop UI and privileged service share `omdrop-desktop.exe`, running as a normal user
   process and a separate `--service` process. Dispatch service mode before initializing GPUI,
   single-instance handling or Explorer registration.
-- Keep the UI unelevated so Explorer drag-and-drop works. The service manages OWL; only one
+- Keep the UI unelevated so Explorer drag-and-drop works. The service manages the Rust bridge; only one
   process may own the radio's serial port at a time.
 - Closing the sharing card only hides it. Tray Quit must cancel sending, stop receiving and
-  wait for the service to reclaim OWL. Preserve error reporting and retry support when shutdown fails.
+  wait for the service to reclaim the Rust bridge. Preserve error reporting and retry support when shutdown fails.
 - `omdrop-service` provides both the library linked into desktop and a standalone service entry
   point. Account for both modes when modifying it.
 - Keep `omdrop-proto` usable with `no_std` and the Rust firmware application allocation-free.
   For shared protocol changes, check the Rust definitions, `crates/omdrop-proto/include/proto.h`,
-  OWL and firmware together. Verify message lengths, CRC, COBS and boundary handling.
+  the Rust bridge and firmware together. Verify message lengths, CRC, COBS and boundary handling.
 - For FFI changes, check `repr(C)`, field layout, buffer lengths, pointer lifetimes and thread
   access constraints. Keep hardware calls in the C/C++ interface layer. Never make blocking
   driver calls while holding the firmware state spinlock.
@@ -102,15 +101,17 @@ Firmware builds require ESP-IDF 6.0 and the ESP32-S3 toolchain installed with `e
 supports an activated environment, an EIM installation or `-IdfProfile <activation-script>`.
 Host tests of firmware logic do not replace an Xtensa build or validation on the board.
 
-For OWL, patch or USB queue changes, put MinGW-w64 GCC and Git on PATH. The build script
-discovers installed CMake/Ninja; see the development guide for tool path overrides. Run:
+For AWDL, AirDrop or USB queue changes, test the affected adapters and pinned crates:
 
 ```powershell
-scripts/build-owl.ps1 -Test
+scripts/build-bridge.ps1 -Test
+cargo test -p omdrop-core --all-targets --locked
+cargo test --manifest-path vendor/owly-awdl/Cargo.toml --all-features --locked
+cargo test --manifest-path vendor/owly-airdrop/Cargo.toml --all-features --lib --test vectors --locked
 ```
 
 For service changes, start with `cargo test -p omdrop-service --all-targets --locked`. Regular
-service tests use temporary configuration, a separate pipe and a simulated OWL child process.
+service tests use temporary configuration, a separate pipe and a simulated the Rust bridge child process.
 Ignored tests that exercise the installed service change its running state; run them separately
 when they fall within the task's scope.
 
@@ -121,15 +122,16 @@ skipping assertions or disabling checks to make them pass.
 
 ## Build Files and Assets
 
-- Keep upstream OWL changes in `native/owl/patches`, applied in filename order to the revision
-  specified by `native/owl/pins`. The build script reconstructs `.cache/upstream/owl`; do not
-  leave changes only in that downloaded checkout.
+- Keep Owly sources, standalone lockfiles, upstream revisions, MIT licenses and
+  adaptation notes tracked in `vendor/owly-awdl` and `vendor/owly-airdrop`.
+  Changes must include protocol and transport regression checks. Do not leave
+  adaptations only in downloaded caches.
 - Preserve the root and firmware Cargo lockfiles, `firmware/dependencies.lock`, component
   manifests and licenses. Dependency upgrades must relate to the task. Do not remove download
   verification or bypass pinned revisions.
 - Put ESP-IDF configuration changes in `firmware/sdkconfig.defaults` or
   `firmware/sdkconfig.defaults.cardputer`. `target`, `firmware/target`, `firmware/build-rust`,
-  `native/owl/build`, `.cache`, `firmware/managed_components` and local `build` contents are
+  `.cache`, `firmware/managed_components` and local `build` contents are
   build output or caches and must not be committed.
 - Translation source lives in `firmware/assets/locales.json`. When changing text, use
   `scripts/generate-ui-font.py` to regenerate the string table and font subsets together.

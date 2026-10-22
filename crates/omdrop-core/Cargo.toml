@@ -2,14 +2,14 @@
 name = "omdrop-core"
 version = "0.1.0"
 edition = "2021"
-description = "Rust AirDrop network core: AWDL interface values and mDNS discovery/advertising"
+description = "Windows application adapter for Owly AirDrop protocols and state machines"
 license = "GPL-3.0-only"
 
 [dependencies]
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 hex = "0.4"
-omdrop-airdrop = { path = "../omdrop-airdrop" }
-omdrop-net = { path = "../omdrop-net" }
+owly-airdrop = { path = "../../vendor/owly-airdrop", version = "=0.4.0", features = ["mdns"] }
+tokio = { version = "1", features = ["rt", "fs", "io-util", "sync", "time", "macros"] }
 omdrop-board = { path = "../omdrop-board" }
 rcgen = "0.14"
 rustls = "0.23"

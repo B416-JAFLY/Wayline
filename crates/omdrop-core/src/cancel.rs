@@ -49,23 +49,11 @@ impl SendCancellation {
     }
 }
 
-pub(crate) struct CheckedWriter<'a, W>(pub W, pub &'a SendCancellation);
-impl<W: io::Write> io::Write for CheckedWriter<'_, W> {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.1.check()?;
-        self.0.write(bytes)
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        self.1.check()?;
-        self.0.flush()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::{
-        io::{Read, Write},
+        io::Read,
         net::TcpListener,
         time::{Duration, Instant},
     };
@@ -88,14 +76,15 @@ mod tests {
     }
 
     #[test]
-    fn cancelled_archive_writer_never_writes_or_reuses_a_socket() {
+    fn cancelled_archive_preparation_never_opens_inputs() {
         let cancel = SendCancellation::default();
         cancel.cancel();
-        let mut output = Vec::new();
-        assert!(CheckedWriter(&mut output, &cancel)
-            .write_all(b"private data")
-            .is_err());
-        assert!(output.is_empty());
+        assert!(owly_airdrop::driver::sender::prepare_cancellable(
+            &[std::path::PathBuf::from("missing-file")],
+            owly_airdrop::proto::archive::compress::Compressor::Gzip,
+            &|| cancel.check(),
+        )
+        .is_err());
         assert!(cancel.check().is_err());
     }
 }

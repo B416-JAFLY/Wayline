@@ -3,12 +3,12 @@ resolver = "2"
 members = [
     "apps/desktop",
     "apps/cli",
-    "crates/omdrop-airdrop",
+    "apps/bridge",
+    "crates/omdrop-awdl",
     "crates/omdrop-board",
     "crates/omdrop-core",
     "crates/omdrop-host",
     "crates/omdrop-flash",
-    "crates/omdrop-net",
     "crates/omdrop-proto",
     "crates/omdrop-radio",
     "crates/omdrop-service",
@@ -16,7 +16,7 @@ members = [
 ]
 # ESP32 uses the Xtensa toolchain and its own lockfile/release profile.
 # Third-party compatibility patches are not workspace members.
-exclude = ["firmware", "vendor/stacksafe-macro"]
+exclude = ["firmware", "vendor/stacksafe-macro", "vendor/owly-awdl", "vendor/owly-airdrop"]
 
 [patch.crates-io]
 # Backport upstream macro diagnostics without upgrading GPUI's stacksafe 0.1 runtime.
@@ -30,8 +30,8 @@ codegen-units = 1
 panic = "abort"
 
 # Favor speed in the measured archive/compression hot paths.
-# See docs/DEVELOPMENT.md and crates/omdrop-airdrop/examples/archive_bench.rs.
-[profile.release.package.omdrop-airdrop]
+# See docs/DEVELOPMENT.md and crates/omdrop-core/examples/archive_bench.rs.
+[profile.release.package.owly-airdrop]
 opt-level = 3
 
 [profile.release.package.flate2]

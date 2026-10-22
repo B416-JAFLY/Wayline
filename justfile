@@ -22,17 +22,13 @@ build-cardputer: build-firmware
 # Flash owl-radio to the Cardputer Adv (replaces its current firmware)
 flash-cardputer: flash
 
-# Build owl.exe: OWL for Windows, with the ESP32 as its radio
-build-owl:
-    ./scripts/build-owl.ps1
+# Build the default Rust AWDL bridge with verified Wintun
+build-bridge:
+    ./scripts/build-bridge.ps1
 
-# Rebuild patched OWL and test the protocol/Windows queue without hardware
-test-owl:
-    ./scripts/build-owl.ps1 -Test
-
-# Run OWL on the ESP32 with awdl0 (run from an administrator terminal)
-owl *ARGS: build-owl
-    ./native/owl/build/owl.exe -i {{port}} -c 6 -N -F -E -S pin -T -v {{ARGS}}
+# Test the Rust bridge and pinned AWDL core without hardware
+test-bridge:
+    ./scripts/build-bridge.ps1 -Test
 
 # Probe the radio protocol (hello, capture, ack-test, link)
 spike TEST *ARGS:

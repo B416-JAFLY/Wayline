@@ -1,5 +1,5 @@
 # Install (or update) the OmdropOwl service: publishes it to
-# %ProgramFiles%\omdrop-owl with owl.exe and wintun.dll beside it. The default
+# %ProgramFiles%\omdrop-owl with omdrop-bridge.exe and wintun.dll beside it. The default
 # desktop binary also runs the LocalSystem service with --service, on demand.
 # Run as an administrator; launch the desktop normally afterwards.
 #   scripts\install-service.ps1            install/update the combined desktop + service
@@ -39,10 +39,13 @@ if ($Uninstall) {
     return
 }
 
-$owl = Join-Path $Root 'native\owl\build\owl.exe'
-$wintun = Join-Path $Root 'native\owl\build\wintun.dll'
-if (-not (Test-Path $owl)) { throw "build owl.exe first: scripts\build-owl.ps1" }
-if (-not (Test-Path $wintun)) { throw "build wintun.dll first: scripts\build-owl.ps1" }
+if ($Build) { & (Join-Path $PSScriptRoot 'build-bridge.ps1') }
+$bridge = Join-Path $Root 'target\release\omdrop-bridge.exe'
+$wintun = Join-Path $Root 'target\release\wintun.dll'
+if (-not (Test-Path -LiteralPath $bridge)) { throw 'Build the Rust bridge first: scripts/build-bridge.ps1' }
+if (-not (Test-Path -LiteralPath $wintun)) { throw 'Build the verified Wintun bundle first: scripts/build-bridge.ps1' }
+. (Join-Path $PSScriptRoot 'release-common.ps1')
+$null = Get-BridgeReleaseMetadata $Root
 
 # Complete the build and check for an open installed UI before stopping the
 # service. The desktop and its service use the same on-disk executable.
@@ -68,6 +71,8 @@ if ($Runtime -eq 'Desktop') {
     $binaryPath = "`"$exe`" --service --resident"
 }
 if (-not (Test-Path -LiteralPath $sourceExe -PathType Leaf)) { throw 'Build the host binary first, or pass -Build.' }
+Assert-InstallBridgeConfiguration -ConfigPath (Join-Path $env:ProgramData 'omdrop-owl/config.json') `
+    -PackageRoot (Join-Path $Root 'target/release') -InstallRoot $Dest
 
 if ($existing -and $existing.Status -ne 'Stopped') {
     Stop-Service $Name
@@ -75,25 +80,15 @@ if ($existing -and $existing.Status -ne 'Stopped') {
 }
 New-Item -ItemType Directory -Force $Dest | Out-Null
 Copy-Item -LiteralPath $sourceExe -Destination $exe -Force
-Copy-Item -LiteralPath $owl, $wintun -Destination $Dest -Force
+Copy-Item -LiteralPath $bridge, $wintun, (Join-Path $Root 'target/release/omdrop-bridge-build.json') -Destination $Dest -Force
+Copy-Item -LiteralPath (Join-Path $Root 'target/release/bridge-licenses') -Destination $Dest -Recurse -Force
 
-# A config left by development may point owl.exe elsewhere; installed, it lives beside the service.
-$config = Join-Path $env:ProgramData 'omdrop-owl\config.json'
-if (Test-Path $config) {
-    $c = Get-Content $config -Raw | ConvertFrom-Json
-    $owlPathProperty = $c.PSObject.Properties | Where-Object Name -IEQ 'OwlPath'
-    if ($owlPathProperty) {
-        $c.PSObject.Properties.Remove($owlPathProperty.Name)
-        $temporary = "$config.$([Guid]::NewGuid().ToString('N')).tmp"
-        [IO.File]::WriteAllText($temporary, ($c | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
-        [IO.File]::Replace($temporary, $config, $null)
-    }
-}
+# The service runs the Rust bridge; explicit bridgePath settings are preserved.
 
 $startupType = if ($Runtime -eq 'Desktop') { 'Manual' } else { 'Automatic' }
 if (-not $existing) {
     New-Service -Name $Name -BinaryPathName $binaryPath -DisplayName 'omdrop-owl (AirDrop radio)' `
-        -Description 'Runs owl.exe: AWDL over an ESP32, as the awdl0 adapter AirDrop uses.' -StartupType $startupType | Out-Null
+        -Description 'Runs the Rust AWDL bridge over an ESP32 and Wintun awdl0.' -StartupType $startupType | Out-Null
 } else {
     # An earlier install may have gone elsewhere (Program Files (x86), from a 32-bit shell).
     sc.exe config $Name binPath= $binaryPath | Out-Null

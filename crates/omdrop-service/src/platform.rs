@@ -41,11 +41,11 @@ use windows_sys::Win32::{
 
 pub struct WindowsBackend {
     pub data_dir: PathBuf,
-    pub default_owl: PathBuf,
+    pub default_bridge: PathBuf,
 }
 
 impl Backend for WindowsBackend {
-    type Process = OwlProcess;
+    type Process = BridgeProcess;
     fn find_port(&mut self) -> io::Result<Option<String>> {
         let ports = serialport::available_ports().map_err(io::Error::other)?;
         Ok(select_esp_port(ports))
@@ -53,7 +53,7 @@ impl Backend for WindowsBackend {
     fn awdl_ready(&mut self) -> io::Result<bool> {
         awdl_ready()
     }
-    fn spawn(&mut self, config: &Config, port: &str) -> io::Result<OwlProcess> {
+    fn spawn(&mut self, config: &Config, port: &str) -> io::Result<BridgeProcess> {
         let device = crate::device_lock::DeviceGuard::try_acquire(port)?;
         let failed_port = if config.port == "auto" {
             crate::device_lock::first_failed_port()?
@@ -66,10 +66,10 @@ impl Backend for WindowsBackend {
             )));
         }
         let exe = config
-            .owl_path
+            .bridge_path
             .as_ref()
             .map(PathBuf::from)
-            .unwrap_or_else(|| self.default_owl.clone());
+            .unwrap_or_else(|| self.default_bridge.clone());
         if !exe.is_file() {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
@@ -81,24 +81,13 @@ impl Backend for WindowsBackend {
         let console = OpenOptions::new()
             .create(true)
             .append(true)
-            .open(self.data_dir.join("owl-console.log"))?;
+            .open(self.data_dir.join("bridge-console.log"))?;
+        let channel = config.channel.to_string();
+        let args = ["--port", port, "--channel", &channel, "--managed"];
         let mut child = Command::new(exe)
-            .args([
-                "-i",
-                port,
-                "-c",
-                &config.channel.to_string(),
-                "-N",
-                "-F",
-                "-E",
-                "-S",
-                "pin",
-                "-T",
-                "-v",
-            ])
+            .args(args)
             .current_dir(&self.data_dir)
-            .env("OWL_LOG_FILE", self.data_dir.join("owl.log"))
-            .env("OWL_STOP_EVENT", &event.name)
+            .env("OMDROP_BRIDGE_STOP_EVENT", &event.name)
             .stdin(Stdio::null())
             .stdout(console.try_clone()?)
             .stderr(console)
@@ -120,7 +109,7 @@ impl Backend for WindowsBackend {
             let _ = child.wait();
             return Err(e);
         }
-        Ok(OwlProcess {
+        Ok(BridgeProcess {
             child,
             event,
             _job: job,
@@ -157,7 +146,7 @@ impl StopEvent {
             .unwrap_or_default()
             .as_nanos();
         let name = format!(
-            "Global\\omdrop-owl-stop-{}-{time}-{}",
+            "Global\\omdrop-bridge-stop-{}-{time}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         );
@@ -179,13 +168,13 @@ impl StopEvent {
     }
 }
 
-pub struct OwlProcess {
+pub struct BridgeProcess {
     child: Child,
     event: StopEvent,
     _job: OwnedHandle,
     _device: crate::device_lock::DeviceGuard,
 }
-impl ManagedProcess for OwlProcess {
+impl ManagedProcess for BridgeProcess {
     fn exit_code(&mut self) -> io::Result<Option<String>> {
         self.child
             .try_wait()
@@ -202,7 +191,7 @@ impl ManagedProcess for OwlProcess {
         Ok(())
     }
 }
-impl Drop for OwlProcess {
+impl Drop for BridgeProcess {
     fn drop(&mut self) {
         let _ = self.kill_and_wait();
     }

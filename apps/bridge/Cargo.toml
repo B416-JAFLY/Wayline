@@ -1,0 +1,14 @@
+[package]
+name = "omdrop-bridge"
+version = "0.1.0"
+edition = "2021"
+description = "Rust AWDL wireless child process for the Omdrop Windows service"
+license = "GPL-3.0-only"
+
+[target.'cfg(windows)'.dependencies]
+omdrop-awdl = { path = "../../crates/omdrop-awdl" }
+omdrop-service = { path = "../../crates/omdrop-service" }
+tokio = { version = "1", features = ["rt", "sync", "time", "macros", "signal"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }

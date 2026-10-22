@@ -1,6 +1,0 @@
-[package]
-name = "omdrop-net"
-version = "0.1.0"
-edition = "2021"
-description = "DNS/mDNS and lenient HTTP primitives for the Rust AirDrop port"
-license = "GPL-3.0-only"

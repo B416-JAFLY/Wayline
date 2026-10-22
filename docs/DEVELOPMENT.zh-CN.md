@@ -9,13 +9,12 @@
 | 目标 | 依赖 |
 | --- | --- |
 | Windows 应用 | Git、Rust MSVC、Visual Studio C++ Build Tools、Windows SDK（含 `fxc.exe`） |
-| OWL | PATH 中的 MinGW-w64 GCC 和 Git，以及 CMake、Ninja |
 | 固件 | ESP-IDF 6.0，以及通过 `espup` 安装的 ESP32-S3 Xtensa 工具链；ESP32-C5 构建另需 RISC-V 目标 |
 
-先构建 OWL，再构建主机应用：
+构建 Rust 桥接程序和主机应用：
 
 ```powershell
-scripts/build-owl.ps1 -Test
+scripts/build-bridge.ps1 -Test
 scripts/build-release.ps1
 cargo fmt --all -- --check
 cargo test --workspace --locked
@@ -23,11 +22,11 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo check -p omdrop-proto --no-default-features --locked
 ```
 
-OWL 输出位于 `native/owl/build`，主机程序位于 `target/release`。OWL 脚本获取固定版本源码、应用[补丁](../native/owl/patches/README.md)并校验 Wintun。CMake/Ninja 从 PATH、CMake/ESP-IDF 安装目录（含 `IDF_TOOLS_PATH`）和 Visual Studio 中查找，可用 `-CMakePath`、`-NinjaPath` 覆盖。OWL 回归测试无需硬件。
+默认构建输出到 `target/release`，包含 Rust 桥接程序和校验后的 Wintun。
 
 仅开发桌面时运行 `scripts/build-desktop.ps1`，加 `-DebugBuild` 构建调试版。脚本查找 SDK 着色器编译器，可用 `GPUI_FXC_PATH` 覆盖。GPUI 的间接宏依赖使用本地 [stacksafe-macro 补丁](../vendor/stacksafe-macro/README.md)，需保留源码和许可证。
 
-服务测试使用临时配置、独立管道和模拟 OWL 子进程：
+服务测试使用临时配置、独立管道和模拟 Rust 桥接程序 子进程：
 
 ```powershell
 cargo test -p omdrop-service --all-targets --locked
@@ -40,6 +39,47 @@ cargo test -p omdrop-service installed_service_lifecycle_without_administrator_r
 ```
 
 主机测试不能替代固件构建、普通用户安装或设备测试。`just --list` 可查看任务快捷入口。
+
+### Rust AWDL 后端
+
+`apps/bridge` 是服务管理的无线子进程；`crates/omdrop-awdl` 实现 ESP32 串口、
+Wintun、IPv6 和板端反馈适配。AWDL 协议来自固定的 Owly 0.4.0，
+[源码与本地适配说明](../vendor/owly-awdl/README.md)记录版本和许可证。
+AirDrop 协议和状态机统一使用固定版本的 `owly-airdrop`；`omdrop-core` 负责 Windows 收发运行、回调、取消、身份存储与板端反馈。固件协议和桌面交互保持不变。
+
+```powershell
+scripts/build-bridge.ps1 -Test
+# 调试构建：
+scripts/build-bridge.ps1 -DebugBuild -Test
+```
+
+输出是 `target/release/omdrop-bridge.exe`（调试版在 `target/debug`），旁边放置
+经过固定版本 SHA-256 校验的 `wintun.dll`、`bridge-licenses` 和来源记录
+`omdrop-bridge-build.json`。构建不打开串口、不创建网卡、不修改已安装服务。
+服务只运行 Rust 桥接程序。配置 `%ProgramData%\omdrop-owl\config.json` 的可选绝对
+`bridgePath` 可覆盖服务程序旁的 `omdrop-bridge.exe`；安装器在停止服务前检查其可用性。
+构建本身不会更新已安装服务，设备互通仍待实机验收。
+独立前台运行需要管理员终端、真实端口以及已退出的桌面/服务；`COM4` 仅为示例：
+
+```powershell
+target/release/omdrop-bridge.exe --port COM4 --channel 6
+```
+
+前台运行取得设备互斥锁，Ctrl+C 等待串口与 Wintun 线程退出；`--managed` 仅用于
+服务启动，要求服务停止事件。板端反馈仍使用 `omdrop-radio-ui`，反馈失败独立于
+文件传输。服务会话、停止和异常回收沿用现有行为。
+
+主机回归检查：
+
+```powershell
+cargo test -p omdrop-awdl -p omdrop-bridge -p omdrop-service -p omdrop-core --all-targets --locked
+cargo test --manifest-path vendor/owly-airdrop/Cargo.toml --all-features --lib --test vectors --locked
+cargo test --manifest-path vendor/owly-awdl/Cargo.toml --all-features --locked
+cargo clippy --manifest-path vendor/owly-awdl/Cargo.toml --all-targets --all-features --locked -- -D warnings
+```
+
+模拟串口、真实测试管道与模拟无线子进程不操作设备；真实 Wintun 驱动、ESP32
+时序和 Apple 设备双向互通仍需设备验收，主机测试不能替代硬件验收。
 
 ### 固件构建与刷写
 
@@ -88,7 +128,7 @@ python tests/firmware_regression.py -p COM4 --target esp32c5 --five-ghz
 
 桌面与 CLI 共用 `omdrop-core` 收发逻辑、`omdrop-host` 设置与身份及 AWDL 选择、`omdrop-flash` 固件操作和 `omdrop-service` 管道客户端。普通权限 UI 与 LocalSystem 服务共用 `omdrop-desktop.exe`；必须在 GPUI、单实例处理和资源管理器注册前分派 `--service`。
 
-启动时取得服务会话。托盘退出或 `Ctrl+Q` 取消桌面工作线程并释放会话，最后一个按需客户端等待 OWL 回收后才关闭服务。关闭卡片只隐藏界面，任务继续运行。开发者安装需先退出已安装的桌面，再在管理员终端运行 `scripts/install-service.ps1`；`-Build` 会先构建。以普通权限启动 UI，确保资源管理器拖放可用。
+启动时取得服务会话。托盘退出或 `Ctrl+Q` 取消桌面工作线程并释放会话，最后一个按需客户端等待 Rust 桥接程序 回收后才关闭服务。关闭卡片只隐藏界面，任务继续运行。开发者安装需先退出已安装的桌面，再在管理员终端运行 `scripts/install-service.ps1`；`-Build` 会先构建。以普通权限启动 UI，确保资源管理器拖放可用。
 
 | 参数 | 行为 |
 | --- | --- |
@@ -199,10 +239,10 @@ python tests/firmware_regression.py -p COM4
 配置位于 `%ProgramData%\omdrop-owl\config.json`，采用原子写入：
 
 ```json
-{"port":"auto","channel":6,"enabled":true,"owlPath":null}
+{"port":"auto","channel":6,"enabled":true,"bridgePath":null}
 ```
 
-`port` 接受 `auto` 或 COM 端口，ESP32-S3 使用信道 6；ESP32-C5 还可使用 5 GHz 的 AWDL 信道 44 和 149。`owlPath` 为绝对路径，null 表示服务旁的 `owl.exe`。日志为 `service.log`、`owl.log` 和 `owl-console.log`。
+`port` 接受 `auto` 或 COM 端口，ESP32-S3 使用信道 6；ESP32-C5 还可使用信道 44 和 149。`bridgePath` 为绝对路径，null 表示服务旁的 `omdrop-bridge.exe`。日志为 `service.log` 和 `bridge-console.log`。
 
 桌面安装使用 `--service --on-demand`；`scripts/install-service.ps1 -Runtime Rust` 安装自动启动、带 `--resident` 的独立服务。两个服务入口均支持这两种生命周期模式，默认常驻。`-Uninstall` 移除服务注册，保留安装文件。
 
@@ -212,14 +252,14 @@ python tests/firmware_regression.py -p COM4
 cargo run -p omdrop-service -- --console --data-dir E:\path\to\service-data --pipe omdrop-dev
 ```
 
-同一无线设备只能由一个管理进程持有。Ctrl+C 等待 OWL 退出最多五秒，超时后终止并回收子进程；不改变配置的 `enabled` 值。
+同一无线设备只能由一个管理进程持有。Ctrl+C 等待 Rust 桥接程序 退出最多五秒，超时后终止并回收子进程；不改变配置的 `enabled` 值。
 
 默认控制管道为 `\\.\pipe\omdrop-owl`，请求是含 `cmd` 的 JSON 行：
 
 | 命令 | 字段 | 效果 |
 | --- | --- | --- |
 | `status` | — | 读取无线状态 |
-| `start`、`stop` | — | 持久化启用状态并启动/停止 OWL |
+| `start`、`stop` | — | 持久化启用状态并启动/停止 Rust 桥接程序 |
 | `set` | 可选 `port`、`channel` | 更新无线配置 |
 | `firewall` | `exe` | 为已存在的桌面或 CLI 程序配置规则 |
 
@@ -229,7 +269,7 @@ cargo run -p omdrop-service -- --console --data-dir E:\path\to\service-data --pi
 
 带版本的 `<control-pipe>.sessions` 管道持有客户端、发送、接收和维护租约。服务校验进程 ID，将令牌绑定到服务实例并回收断开的客户端。缺少能力时需更新服务，最终关闭期间拒绝新租约。
 
-维护拒绝活动传输，回收 OWL 并阻止新任务，不改变 `enabled`。OWL 启动和烧录共享按端口命名的互斥锁，Job Object 确保设备复用前烧录工具已退出。写入中断会保留就绪失败记录，重试通过镜像校验和 HELLO 后才清除。
+维护拒绝活动传输，回收 Rust 桥接程序 并阻止新任务，不改变 `enabled`。Rust 桥接程序 启动和烧录共享按端口命名的互斥锁，Job Object 确保设备复用前烧录工具已退出。写入中断会保留就绪失败记录，重试通过镜像校验和 HELLO 后才清除。
 
 就绪记录为 Windows Public 已知文件夹下 `Omdrop/device-state` 中的 `COMx.failed`。任何失败记录都会阻止 `port: "auto"`。设备重新枚举可能改变端口号，成功重试只清除新端口记录。通过 `set` 明确配置已验证的新端口，或核实旧设备后处理其记录；不要清除无关失败。系统不会自动关联新旧 USB 身份。
 
@@ -238,7 +278,6 @@ cargo run -p omdrop-service -- --console --data-dir E:\path\to\service-data --pi
 从同一检出版本构建主机与固件，再使用新的输出目录。构建和打包不会启动服务、打开端口或刷写设备。
 
 ```powershell
-scripts/build-owl.ps1 -Test
 scripts/build-release.ps1
 scripts/build-firmware.ps1
 scripts/package-firmware.ps1 -OutputDirectory build/firmware-package
@@ -247,13 +286,13 @@ scripts/package-release.ps1 -OutputDirectory build/release-package -FirmwarePack
 scripts/install-prebuilt.ps1 -PackageRoot build/release-package -VerifyOnly
 ```
 
-主机构建记录为 `target/release/omdrop-build.json`，固件记录为 `firmware/build-rust/omdrop-build.json`。打包校验源码版本、程序版本、哈希、OWL 固定版本/补丁、镜像范围和工具元数据。固件 `manifest.json` 描述板型、分区布局、协议和镜像，`release.json` 记录包内每个文件的长度与 SHA-256；缺失、修改或未列出的文件都会使校验失败。
+主机构建记录为 `target/release/omdrop-build.json`，固件记录为 `firmware/build-rust/omdrop-build.json`。打包校验源码版本、程序版本、哈希、Rust 桥接程序的固定版本与构建记录、镜像范围和工具元数据。固件 `manifest.json` 描述板型、分区布局、协议和镜像，`release.json` 记录包内每个文件的长度与 SHA-256；缺失、修改或未列出的文件都会使校验失败。
 
 [下载脚本](../scripts/fetch-flash-tool.ps1)固定并校验独立 esptool 5.0.2，使用其输出的工具目录。烧录在取得维护前校验输入，使用 ROM `--no-stub` 命令，逐镜像验证后复位并检查 HELLO。更新保留未写入的 NVS，写入中断可能需要完整重试。
 
 | 打包参数 | 内容 |
 | --- | --- |
-| 默认 | 桌面、服务、OWL/Wintun、固件和烧录工具 |
+| 默认 | 桌面、服务、Rust 桥接程序/Wintun、固件和烧录工具 |
 | `-IncludeCli` | 向运行时包加入 CLI |
 | `-Runtime Rust -IncludeCli` | 常驻服务与 CLI，不包含固件和烧录工具 |
 | `-Runtime Cli` | 不含安装器或服务的 CLI 工具包 |
@@ -266,6 +305,7 @@ scripts/install-prebuilt.ps1 -PackageRoot build/release-package -VerifyOnly
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/release_validation.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/rust_release_validation.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/installer_service_configuration.ps1
 ```
 
@@ -308,13 +348,13 @@ cargo test --manifest-path firmware/Cargo.toml --all-features --locked
 
 ## 板端传输反馈
 
-桌面和 CLI 调用 `omdrop_core::enable_board_feedback()`。`omdrop-board` 通过 OWL 的 `omdrop-radio-ui` 管道每秒最多发布五次更新，并每秒发送心跳。反馈失败不影响文件收发，也不代表授权接受请求。
+桌面和 CLI 调用 `omdrop_core::enable_board_feedback()`。`omdrop-board` 通过 Rust 桥接程序 的 `omdrop-radio-ui` 管道每秒最多发布五次更新，并每秒发送心跳。反馈失败不影响文件收发，也不代表授权接受请求。
 
 发送与接收使用独立状态通道。新任务唤醒屏幕并暂停自动熄屏；成功卡片十秒消失，失败/取消卡片三十秒消失，八秒无心跳将活动反馈标记为丢失。Windows 栅格化 Unicode 设备名称字形。
 
-协议 v2 的 `0x08` 携带 `crates/omdrop-proto/src/transfer.rs` 中定义的 1,152 字节帧。`0x09` 查询方向 0/1，通过 `0x89` 返回 32 字节头。管道接受 `0 + frame` 或 `1 + direction`，返回状态 0 和查询数据（拒绝为 1），再等待 `0xff`。发布仅确认 OWL 入队，查询确认固件状态。
+协议 v2 的 `0x08` 携带 `crates/omdrop-proto/src/transfer.rs` 中定义的 1,152 字节帧。`0x09` 查询方向 0/1，通过 `0x89` 返回 32 字节头。管道接受 `0 + frame` 或 `1 + direction`，返回状态 0 和查询数据（拒绝为 1），再等待 `0xff`。发布仅确认 Rust 桥接程序 入队，查询确认固件状态。
 
-OWL 与固件运行时，验证文件内容、状态通道、拒绝与取消：
+Rust 桥接程序 与固件运行时，验证文件内容、状态通道、拒绝与取消：
 
 ```powershell
 cargo run -p omdrop-core --example board_loopback
@@ -325,7 +365,7 @@ cargo run -p omdrop-core --example board_loopback -- --failure-cases
 
 ### 实验性接收聚合
 
-可选 A-MPDU 接收支持 Apple → ESP32 → PC。固件处理 ADDBA/DELBA 与硬件 Block Ack，OWL 不需要额外参数。普通构建默认关闭，尚未实现 PC → Apple 发送聚合。吞吐与 BA 时序需要实机验证。
+可选 A-MPDU 接收支持 Apple → ESP32 → PC。固件处理 ADDBA/DELBA 与硬件 Block Ack，Rust 桥接程序 不需要额外参数。普通构建默认关闭，尚未实现 PC → Apple 发送聚合。吞吐与 BA 时序需要实机验证。
 
 ```powershell
 scripts/build-firmware.ps1 -RxAggregation
@@ -367,14 +407,13 @@ python tests/radio_probe.py -p COM4 uplink
 
 `MSG_STATS` 请求体 `UP` 返回十四个 u32le 字段（56 字节，v1），包含批量统计、驱动字节数、编码/写入/互斥锁计时、错误、最大值、堆与中断核心，见 [proto.h](../crates/omdrop-proto/include/proto.h)。总量按 u32 回绕，评估时需同时记录丢帧、传输耗时和文件哈希。
 
-共享编解码器在一次 CRC/COBS 遍历中处理分段输入。OWL 同样按最多 4096 字节/八帧批量写入，保持 FIFO、部分写入与背压处理。接收将 DVZip 流式解码到有界 CPIO 解包器，发送将 CPIO 流式压缩为 gzip/DVZip 临时归档。成功须经过边界校验和接收端最终确认。
+共享编解码器在一次 CRC/COBS 遍历中处理分段输入。Rust 桥接程序 同样按最多 4096 字节/八帧批量写入，保持 FIFO、部分写入与背压处理。接收将 DVZip 流式解码到有界 CPIO 解包器，发送将 CPIO 流式压缩为 gzip/DVZip 临时归档。成功须经过边界校验和接收端最终确认。
 
 ```powershell
 cargo run --release -p omdrop-proto --example codec_bench
-cargo run --release -p omdrop-airdrop --example archive_bench
-cargo run --release -p omdrop-airdrop --example archive_bench --features flate2/zlib-rs
-native/owl/build/owl_test_radio_io.exe --bench
-cargo test -p omdrop-airdrop -p omdrop-core --features flate2/zlib-rs
+cargo run --release -p omdrop-core --example archive_bench
+cargo test --manifest-path vendor/owly-airdrop/Cargo.toml --all-features --lib --test vectors --locked
+cargo test -p omdrop-core --locked
 ```
 
 主机基准测量编解码 CPU 成本。无线吞吐须在固定板型、信道和文件的实机环境测量，同时记录耗时、完整性和丢帧计数。

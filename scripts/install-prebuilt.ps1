@@ -48,6 +48,8 @@ try { $ownsInstallerLock = $installerLock.WaitOne(0) } catch [Threading.Abandone
 if (-not $ownsInstallerLock) { throw 'Another Omdrop installation is running.' }
 $programFiles = if ($env:ProgramW6432) { $env:ProgramW6432 } else { $env:ProgramFiles }
 $dest = Assert-InstallChild $programFiles (Join-Path $programFiles 'omdrop-owl')
+Assert-InstallBridgeConfiguration -ConfigPath (Join-Path $env:ProgramData 'omdrop-owl/config.json') `
+    -PackageRoot $PackageRoot -InstallRoot $dest
 $suffix = [Guid]::NewGuid().ToString('N')
 $staging = Assert-InstallChild $programFiles (Join-Path $programFiles "omdrop-owl-staging-$suffix")
 $backup = Assert-InstallChild $programFiles (Join-Path $programFiles "omdrop-owl-backup-$suffix")

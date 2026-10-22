@@ -1,6 +1,6 @@
 /*
- * The wire protocol between owl-radio and the host (tests/radio_probe.py now,
- * native/owl's io_esp.c later). Keep them in step.
+ * The wire protocol between the Rust firmware and host bridge.
+ * Keep these definitions aligned with crates/omdrop-proto/src/lib.rs.
  *
  * Every message is  type:u8 body... crc16:u16le , COBS-encoded and ended with
  * a 0x00. CRC-16/CCITT-FALSE over type and body. Integers are little-endian.

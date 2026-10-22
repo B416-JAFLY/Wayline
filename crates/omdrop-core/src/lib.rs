@@ -14,7 +14,7 @@ pub mod tls;
 
 static BOARD_FEEDBACK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Enable optional ESP32 status reporting through the existing OWL process.
+/// Enable optional ESP32 status reporting through the Rust bridge process.
 /// A missing display never prevents a transfer; library callers opt in explicitly.
 pub fn enable_board_feedback() {
     BOARD_FEEDBACK.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -24,10 +24,7 @@ pub(crate) fn board_feedback_enabled() -> bool {
     BOARD_FEEDBACK.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-pub use airdrop::{
-    build_ask, build_discover_reply, encode_upload, parse_ask, IncomingFile, IncomingTransfer,
-    UploadFormat,
-};
+pub use airdrop::{IncomingFile, IncomingTransfer};
 pub use cancel::SendCancellation;
 pub use discovery::{
     discover_receivers_live, discover_receivers_live_cancellable, receiver_by_name, DiscoveryEvent,

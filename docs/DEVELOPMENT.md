@@ -11,13 +11,12 @@ For installation and daily use, see the [quick start](QUICKSTART.md).
 | Target | Requirements |
 | --- | --- |
 | Windows apps | Git, Rust MSVC, Visual Studio C++ Build Tools, Windows SDK including `fxc.exe` |
-| OWL | MinGW-w64 GCC and Git on PATH; CMake and Ninja |
 | Firmware | ESP-IDF 6.0 and the ESP32-S3 Xtensa toolchain installed with `espup`; the ESP32-C5 build adds its RISC-V target |
 
-Build OWL before the host applications:
+Build the Rust bridge and host applications:
 
 ```powershell
-scripts/build-owl.ps1 -Test
+scripts/build-bridge.ps1 -Test
 scripts/build-release.ps1
 cargo fmt --all -- --check
 cargo test --workspace --locked
@@ -25,18 +24,14 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo check -p omdrop-proto --no-default-features --locked
 ```
 
-OWL output is in `native/owl/build`; host output is in `target/release`.
-The OWL script fetches pinned sources, applies [patches](../native/owl/patches/README.md)
-and verifies Wintun. It discovers CMake/Ninja through PATH, CMake/ESP-IDF installations
-(including `IDF_TOOLS_PATH`) and Visual Studio. Override with `-CMakePath` or `-NinjaPath`.
-OWL regression tests run without hardware.
+The default release build includes the Rust bridge and verified Wintun in `target/release`.
 
 For desktop-only work, use `scripts/build-desktop.ps1`, adding `-DebugBuild` for debug.
 The script locates the SDK shader compiler; `GPUI_FXC_PATH` overrides it.
 The local [stacksafe-macro patch](../vendor/stacksafe-macro/README.md) supports GPUI's
 indirect macro dependency; keep its source and license tracked.
 
-Service tests use temporary configuration, a separate pipe and a simulated OWL child:
+Service tests use temporary configuration, a separate pipe and a simulated Rust bridge child:
 
 ```powershell
 cargo test -p omdrop-service --all-targets --locked
@@ -51,6 +46,49 @@ cargo test -p omdrop-service installed_service_lifecycle_without_administrator_r
 
 Host tests do not replace a firmware build, standard-user installation or device testing.
 Run `just --list` for task shortcuts.
+
+### Rust AWDL backend
+
+`apps/bridge` is the supervised wireless child. `crates/omdrop-awdl` implements
+ESP32 serial I/O, Wintun, IPv6 and board feedback. The AWDL protocol comes from
+pinned Owly 0.4.0; [source and adaptation notes](../vendor/owly-awdl/README.md)
+record its revision and license. AirDrop uses the pinned owly-airdrop protocol core; omdrop-core owns Windows sockets, callbacks, cancellation, identity and board feedback. The firmware wire protocol is unchanged.
+
+```powershell
+scripts/build-bridge.ps1 -Test
+scripts/build-bridge.ps1 -DebugBuild -Test
+```
+
+The script writes `omdrop-bridge.exe`, verified Wintun 0.14.1, `bridge-licenses`
+and `omdrop-bridge-build.json` to `target/release` or `target/debug`. It does not
+open a port, create an adapter or change services. The service runs only the Rust
+bridge. The optional absolute `bridgePath` in `%ProgramData%\omdrop-owl\config.json`
+overrides `omdrop-bridge.exe` beside the service. Installers check that executable
+before stopping the service. Builds alone do not update an installed service.
+Device interoperability testing is still pending.
+
+Foreground operation requires an administrator terminal, the actual port and a
+stopped desktop/service. COM4 below is an example:
+
+```powershell
+target/release/omdrop-bridge.exe --port COM4 --channel 6
+```
+
+Foreground operation acquires the device lock; Ctrl+C joins serial and Wintun
+workers. `--managed` is reserved for service launches and requires its stop event.
+The board continues using `omdrop-radio-ui`; feedback failure does not fail transfers.
+Session leases and process cleanup retain the service's lifecycle.
+
+```powershell
+cargo test -p omdrop-awdl -p omdrop-bridge -p omdrop-service -p omdrop-core --all-targets --locked
+cargo test --manifest-path vendor/owly-airdrop/Cargo.toml --all-features --lib --test vectors --locked
+cargo test --manifest-path vendor/owly-awdl/Cargo.toml --all-features --locked
+cargo clippy --manifest-path vendor/owly-awdl/Cargo.toml --all-targets --all-features --locked -- -D warnings
+```
+
+These host checks use simulated serial/radio endpoints and isolated real pipes and
+processes. Actual Wintun operation, ESP32 timing and Apple interoperability require
+device validation; host tests do not replace hardware acceptance.
 
 ### Firmware build and flashing
 
@@ -117,7 +155,7 @@ The unelevated UI and LocalSystem service use the same `omdrop-desktop.exe`; dis
 `--service` before GPUI, single-instance handling or Explorer registration.
 
 Launch acquires a service session. Tray Quit or `Ctrl+Q` cancels desktop's workers and releases
-its sessions; the last on-demand client waits for OWL reclamation before service shutdown.
+its sessions; the last on-demand client waits for the Rust bridge reclamation before service shutdown.
 Closing the card hides it while work continues. For developer installation, quit the installed
 desktop and run `scripts/install-service.ps1` in an administrator terminal; `-Build` builds first.
 Launch the UI normally so Explorer drag-and-drop works.
@@ -274,12 +312,11 @@ Reopen desktop or restart the service afterwards.
 Configuration is `%ProgramData%\omdrop-owl\config.json`; writes are atomic:
 
 ```json
-{"port":"auto","channel":6,"enabled":true,"owlPath":null}
+{"port":"auto","channel":6,"enabled":true,"bridgePath":null}
 ```
 
 `port` accepts `auto` or a COM port. Use channel 6 for ESP32-S3; ESP32-C5 can also use AWDL
-channels 44 and 149 in the 5 GHz band. `owlPath` is absolute, or null for `owl.exe` beside the
-service. Logs are `service.log`, `owl.log` and `owl-console.log`.
+channels 44 and 149 in the 5 GHz band. `bridgePath` is absolute, or null for `omdrop-bridge.exe` beside the service. Logs are `service.log` and `bridge-console.log`.
 
 Desktop installs `--service --on-demand`. `scripts/install-service.ps1 -Runtime Rust` installs
 the standalone service with automatic startup and `--resident`. Both service entry points
@@ -292,7 +329,7 @@ For development, create a separate data directory/config and run an elevated con
 cargo run -p omdrop-service -- --console --data-dir E:\path\to\service-data --pipe omdrop-dev
 ```
 
-Only one supervisor may own a radio. Ctrl+C waits up to five seconds for OWL shutdown before
+Only one supervisor may own a radio. Ctrl+C waits up to five seconds for the Rust bridge shutdown before
 terminating and reaping a stuck child; it preserves the configured `enabled` value.
 
 The default control pipe is `\\.\pipe\omdrop-owl`. Requests are JSON lines with `cmd`:
@@ -300,7 +337,7 @@ The default control pipe is `\\.\pipe\omdrop-owl`. Requests are JSON lines with 
 | Command | Fields | Effect |
 | --- | --- | --- |
 | `status` | — | Read radio state |
-| `start`, `stop` | — | Persist enabled state and start/stop OWL |
+| `start`, `stop` | — | Persist enabled state and start/stop the Rust bridge |
 | `set` | Optional `port`, `channel` | Update radio configuration |
 | `firewall` | `exe` | Configure rules for an existing desktop or CLI executable |
 
@@ -316,8 +353,8 @@ The versioned `<control-pipe>.sessions` pipe holds client, send, receive and mai
 The server validates process IDs, binds tokens to the service instance and reclaims lost clients.
 Missing capabilities require a service update; new leases are rejected during final shutdown.
 
-Maintenance rejects active transfers, reaps OWL and blocks new work without changing `enabled`.
-OWL startup and flashing share a per-port mutex; a Job Object reaps flashing tools before reuse.
+Maintenance rejects active transfers, reaps the Rust bridge and blocks new work without changing `enabled`.
+the Rust bridge startup and flashing share a per-port mutex; a Job Object reaps flashing tools before reuse.
 Interrupted writes retain readiness failure until a retry passes image verification and HELLO.
 
 Readiness records are `COMx.failed` in the Windows Public known folder's `Omdrop/device-state`.
@@ -332,7 +369,6 @@ Build matching host and firmware outputs from the same checkout, then use new ou
 Builds and packaging do not start services, open ports or flash hardware.
 
 ```powershell
-scripts/build-owl.ps1 -Test
 scripts/build-release.ps1
 scripts/build-firmware.ps1
 scripts/package-firmware.ps1 -OutputDirectory build/firmware-package
@@ -343,7 +379,7 @@ scripts/install-prebuilt.ps1 -PackageRoot build/release-package -VerifyOnly
 
 Host provenance is `target/release/omdrop-build.json`; firmware provenance is
 `firmware/build-rust/omdrop-build.json`. Packaging checks source revisions, versions, hashes,
-OWL pins/patches, image ranges and tool metadata. Firmware `manifest.json` describes the board,
+the pinned Rust bridge build record, image ranges and tool metadata. Firmware `manifest.json` describes the board,
 partition layout, protocol and images. `release.json` lists every package file's length and
 SHA-256; missing, modified or unlisted files fail verification.
 
@@ -354,7 +390,7 @@ untouched NVS; an interrupted write may require a full retry.
 
 | Package option | Contents |
 | --- | --- |
-| Default | Desktop, service, OWL/Wintun, firmware and flashing tool |
+| Default | Desktop, service, Rust bridge/Wintun, firmware and flashing tool |
 | `-IncludeCli` | Add CLI to a runtime package |
 | `-Runtime Rust -IncludeCli` | Resident service and CLI, without firmware or flashing tool |
 | `-Runtime Cli` | CLI toolkit without installer or service |
@@ -375,6 +411,7 @@ Run installer/package checks without modifying the installed service:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/release_validation.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/rust_release_validation.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/installer_service_configuration.ps1
 ```
 
@@ -433,7 +470,7 @@ Commit generated subsets and their SIL OFL license; normal builds use the checke
 ## Board transfer feedback
 
 Desktop and CLI call `omdrop_core::enable_board_feedback()`. `omdrop-board` publishes through
-OWL's `omdrop-radio-ui` pipe at up to five updates/second with one-second heartbeats.
+the Rust bridge's `omdrop-radio-ui` pipe at up to five updates/second with one-second heartbeats.
 Feedback failures do not fail file transfers or authorize incoming requests.
 
 Send/receive use separate lanes. New work wakes the display and suspends automatic sleep;
@@ -443,9 +480,9 @@ a heartbeat marks active feedback lost. Windows rasterizes Unicode device-name g
 Protocol-v2 `0x08` carries the 1,152-byte frame in `crates/omdrop-proto/src/transfer.rs`.
 `0x09` queries direction 0/1 and returns a 32-byte header in `0x89`. The local pipe accepts
 `0 + frame` or `1 + direction`, returns status 0 plus query data (1 on rejection), then waits
-for `0xff`. Publishing confirms OWL queueing; querying confirms firmware state.
+for `0xff`. Publishing confirms the Rust bridge queueing; querying confirms firmware state.
 
-With OWL and firmware running, test file contents, status lanes, rejection and cancellation:
+With the Rust bridge and firmware running, test file contents, status lanes, rejection and cancellation:
 
 ```powershell
 cargo run -p omdrop-core --example board_loopback
@@ -457,7 +494,7 @@ cargo run -p omdrop-core --example board_loopback -- --failure-cases
 ### Experimental receive aggregation
 
 Opt-in A-MPDU receiving supports Apple → ESP32 → PC. Firmware handles ADDBA/DELBA and hardware
-Block Ack; OWL needs no extra flags. Normal builds disable it; PC → Apple transmit aggregation
+Block Ack; the Rust bridge needs no extra flags. Normal builds disable it; PC → Apple transmit aggregation
 is not implemented. Throughput and BA timing require device validation.
 
 ```powershell
@@ -524,17 +561,16 @@ encoding/write/mutex timings, errors, maxima, heap and interrupt core; see
 [proto.h](../crates/omdrop-proto/include/proto.h). Totals wrap at u32. These counters measure
 uplink traffic; combine them with drops, elapsed transfer time and file hashes.
 
-The shared codec processes segmented inputs in one CRC/COBS pass. OWL also batches up to
+The shared codec processes segmented inputs in one CRC/COBS pass. the Rust bridge also batches up to
 4096 bytes/eight frames, preserving FIFO order and partial-write/backpressure handling.
 Receiving streams DVZip into bounded CPIO extraction; sending streams CPIO into gzip/DVZip
 temporary archives. Success requires boundary validation and final receiver confirmation.
 
 ```powershell
 cargo run --release -p omdrop-proto --example codec_bench
-cargo run --release -p omdrop-airdrop --example archive_bench
-cargo run --release -p omdrop-airdrop --example archive_bench --features flate2/zlib-rs
-native/owl/build/owl_test_radio_io.exe --bench
-cargo test -p omdrop-airdrop -p omdrop-core --features flate2/zlib-rs
+cargo run --release -p omdrop-core --example archive_bench
+cargo test --manifest-path vendor/owly-airdrop/Cargo.toml --all-features --lib --test vectors --locked
+cargo test -p omdrop-core --locked
 ```
 
 Host benchmarks measure codec CPU cost. Measure wireless throughput on hardware with a fixed

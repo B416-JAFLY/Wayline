@@ -1,7 +1,0 @@
-# OWL base for native/owl/patches/owl-*.patch, including -S channel strategies
-# and iOS 26 fixes from the airdrop-mt7921 fork.
-OWL_COMMIT=832d70f815c3d4a06a02117bf0fc5e868daa1ff0
-# OWL patch provenance; see native/owl/patches/README.md.
-OMDROP_OWL_PATCHSET_COMMIT=8213aee9f018ffd78a3fc71863a364fcddd938cd
-# omdrop-awdl 0.8.1: AirDrop sender, mDNS and BLE reference.
-OMDROP_AWDL_COMMIT=534f91a525337951ca19c311e53d333bd6d55100

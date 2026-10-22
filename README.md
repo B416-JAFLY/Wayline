@@ -1,7 +1,12 @@
 # omdrop-windows
 
 AirDrop between Windows and Apple devices through a USB-attached ESP32. The desktop app,
-service, AirDrop core and firmware use Rust; OWL provides AWDL.
+service, AirDrop core and firmware use Rust. AWDL and AirDrop use the pinned Owly crates.
+
+The default Rust AWDL backend based on Owly 0.4.0 can be built separately with
+`scripts/build-bridge.ps1 -Test`. It uses the existing ESP32 firmware protocol and
+Wintun and awaits device interoperability testing.
+See the [development guide](docs/DEVELOPMENT.md#rust-awdl-backend).
 
 Supports Windows 10/11 x64 and M5Stack Cardputer Adv (ESP32-S3, native USB Serial/JTAG,
 2.4 GHz channel 6). The PC needs Bluetooth LE advertising; ESP32 handles Wi-Fi traffic.
@@ -21,12 +26,12 @@ throughput still need device validation. See the
 - **Rust transfer core**: discovery, TLS/HTTP and CPIO/DVZip codecs shared by desktop and CLI,
   with streaming, archive validation, final confirmation, cancellation and failure cleanup.
 - **Service and firmware maintenance**: named pipes and session leases coordinate clients,
-  OWL lifecycle and exclusive serial access. Flashing isolates wireless work and verifies
+  radio lifecycle and exclusive serial access. Flashing isolates wireless work and verifies
   images and device startup before restoring readiness.
 - **Embedded application**: Rust ESP32-S3 application and three-language Cardputer UI,
   a shared allocation-free CRC/COBS protocol, C/C++ hardware drivers and simultaneous
   send/receive feedback. A headless ESP32-C5 profile reuses the same protocol layer.
-- **Builds and verification**: pinned OWL sources, patches and flashing tools, verified
+- **Builds and verification**: pinned Owly sources, adaptations and flashing tools, verified
   firmware and offline packages, host regression tests, protocol tests and UI previews.
 
 ## Interface and transfer demos
@@ -79,11 +84,10 @@ Prepare the [development environment](docs/DEVELOPMENT.md#build-and-test), then 
 from the repository root:
 
 ```powershell
-scripts/build-owl.ps1
 scripts/build-release.ps1
 ```
 
-Outputs are in `native/owl/build` and `target/release`. For developer installation, run
+Outputs, including `omdrop-bridge.exe` and verified Wintun, are in `target/release`. For developer installation, run
 `scripts/install-service.ps1` in an administrator terminal. Firmware builds, including the
 headless ESP32-C5 build, tests and offline packaging are covered in the
 [development guide](docs/DEVELOPMENT.md).
@@ -93,12 +97,12 @@ headless ESP32-C5 build, tests and offline packaging are covered in the
 | Path | Purpose |
 | --- | --- |
 | `apps/desktop`, `apps/cli` | GPUI desktop and CLI entry points |
-| `crates/omdrop-service` | Service, OWL lifecycle, sessions and maintenance |
+| `apps/bridge`, `crates/omdrop-awdl` | Rust AWDL child, ESP32 serial and Wintun integration |
+| `vendor/owly-awdl`, `vendor/owly-airdrop` | Pinned AWDL and AirDrop protocol implementations |
+| `crates/omdrop-service` | Service, radio lifecycle, sessions and maintenance |
 | `crates/omdrop-core`, `crates/omdrop-host`, `crates/omdrop-flash` | Transfers, shared preferences and firmware operations |
-| `crates/omdrop-airdrop`, `crates/omdrop-net` | Archive and network codecs |
 | `crates/omdrop-proto`, `crates/omdrop-board`, `crates/omdrop-radio`, `crates/omdrop-transport` | Shared protocol, board feedback and transport adapters |
 | `firmware` | Independent Rust/ESP-IDF project; hardware interfaces in `firmware/components/radio` |
-| `native/owl` | Windows OWL, pinned versions and patches |
 | `scripts`, `tests`, `assets/branding` | Builds, diagnostics and [branding assets](assets/branding/README.md) |
 
 ## Credits

@@ -146,7 +146,7 @@ impl<B: Backend> Supervisor<B> {
                 self.status.error = child
                     .request_stop()
                     .err()
-                    .map(|e| format!("OWL stop event: {e}"));
+                    .map(|e| format!("wireless bridge stop event: {e}"));
             }
         }
     }
@@ -159,6 +159,7 @@ impl<B: Backend> Supervisor<B> {
     }
 
     pub fn tick(&mut self, now: Duration) {
+        let executable = "omdrop-bridge.exe";
         let adapter_error = match self.backend.awdl_ready() {
             Ok(up) => {
                 self.status.awdl0 = up;
@@ -174,13 +175,16 @@ impl<B: Backend> Supervisor<B> {
                 Ok(Some(code)) => {
                     self.child = None;
                     if self.stopping.take().is_none() && self.config.enabled && !self.shutdown {
-                        self.failed(format!("owl.exe exited ({code}); waiting to restart"), now);
+                        self.failed(
+                            format!("{executable} exited ({code}); waiting to restart"),
+                            now,
+                        );
                     }
                 }
                 Ok(None) => {}
                 Err(e) => {
                     self.begin_stop(now);
-                    self.status.error = Some(format!("cannot inspect owl.exe: {e}"));
+                    self.status.error = Some(format!("cannot inspect {executable}: {e}"));
                 }
             }
         }
@@ -193,7 +197,7 @@ impl<B: Backend> Supervisor<B> {
                             self.stopping = None;
                         }
                         Err(e) => {
-                            self.status.error = Some(format!("cannot terminate owl.exe: {e}"));
+                            self.status.error = Some(format!("cannot terminate {executable}: {e}"));
                             self.stopping = Some(now + Duration::from_secs(1));
                         }
                     }
@@ -259,7 +263,7 @@ impl<B: Backend> Supervisor<B> {
                 self.status.error = None;
             }
             Err(e) => {
-                self.failed(format!("owl.exe: {e}"), now);
+                self.failed(format!("{executable}: {e}"), now);
                 #[cfg(windows)]
                 if e.get_ref()
                     .is_some_and(|error| error.is::<crate::device_lock::DeviceNotReady>())

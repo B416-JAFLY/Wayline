@@ -129,15 +129,15 @@ pub async fn run(
     let config = Config::load(&config_path)?;
     let maintenance_path = options.data_dir.join("maintenance-failed");
     let maintenance_failed = maintenance_path.try_exists()?;
-    // Bind before starting OWL. A duplicate service must not launch another radio.
+    // Bind before starting wireless bridge. A duplicate service must not launch another radio.
     let listener = server::listen(&options.pipe, true)?;
     let session_name = format!("{}.sessions", options.pipe);
     let session_listener = server::listen(&session_name, true)?;
-    let default_owl = std::env::current_exe()?.with_file_name("owl.exe");
+    let default_bridge = std::env::current_exe()?.with_file_name("omdrop-bridge.exe");
     let mut radio = Supervisor::new(
         WindowsBackend {
             data_dir: options.data_dir.clone(),
-            default_owl,
+            default_bridge,
         },
         config,
         config_path,
@@ -233,7 +233,7 @@ pub async fn run(
                             Err(code) => { let _ = response.send(Reply::error(code, if code == "stopping" { "service is stopping; wait for restart" } else { "requested radio role is busy or device recovery is required" })); }
                             Ok(token) if kind == SessionKind::Maintenance => {
                                 // Persist before granting access, so a service/client crash never
-                                // silently restarts OWL against an unfinished flash operation.
+                                // silently restarts wireless bridge against an unfinished flash operation.
                                 match save_maintenance_marker(&maintenance_path) {
                                     Ok(()) => { radio.maintenance(true, start.elapsed()); maintenance_pending = Some((token,response)); }
                                     Err(e) => {
@@ -349,12 +349,12 @@ pub async fn run(
             // return a failure to SCM rather than remaining StopPending forever.
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
-                "OWL did not stop within 10 seconds",
+                "wireless bridge did not stop within 10 seconds",
             ));
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    log(&options, "service stopped; OWL reaped");
+    log(&options, "service stopped; wireless bridge reaped");
     outcome
 }
 

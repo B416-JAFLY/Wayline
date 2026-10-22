@@ -1,4 +1,4 @@
-// This test executable doubles as a fake OWL child. It exercises real Windows
+// This test executable doubles as a fake bridge child. It exercises real Windows
 // process/event/pipe APIs without opening a radio or modifying installed services.
 #[cfg(windows)]
 fn main() {
@@ -32,7 +32,7 @@ fn main() {
             std::thread::park();
         }
     }
-    if std::env::var_os("OWL_STOP_EVENT").is_some() {
+    if std::env::var_os("OMDROP_BRIDGE_STOP_EVENT").is_some() {
         fixture();
         return;
     }
@@ -51,13 +51,18 @@ fn fixture() {
     };
     let dir = std::env::current_dir().unwrap();
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let event = std::env::var("OWL_STOP_EVENT").unwrap();
+    let event = std::env::var("OMDROP_BRIDGE_STOP_EVENT").unwrap();
     let mut starts = fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(dir.join("starts.jsonl"))
         .unwrap();
-    writeln!(starts, "{}", serde_json::json!({"pid":std::process::id(), "args":args, "event":event, "log":std::env::var("OWL_LOG_FILE").unwrap()})).unwrap();
+    writeln!(
+        starts,
+        "{}",
+        serde_json::json!({"pid":std::process::id(), "args":args, "event":event})
+    )
+    .unwrap();
     drop(starts);
     if dir.join("crash").exists() {
         std::process::exit(42);
@@ -91,7 +96,7 @@ fn integration() {
             .await
             .expect("integration suite timed out");
     });
-    println!("Windows integration passed: real OWL child/events/reaping, config persistence, crash backoff, forced stop, pipe isolation and shutdown");
+    println!("Windows integration passed: real bridge child/events/reaping, config persistence, crash backoff, forced stop, pipe isolation and shutdown");
 }
 
 #[cfg(windows)]
@@ -201,7 +206,7 @@ mod checks {
             unsafe {
                 CloseHandle(handle);
             }
-            assert_eq!(result, WAIT_OBJECT_0, "OWL child {pid} must be gone");
+            assert_eq!(result, WAIT_OBJECT_0, "bridge child {pid} must be gone");
         } else {
             assert_eq!(io::Error::last_os_error().raw_os_error(), Some(87));
         }
@@ -213,7 +218,7 @@ mod checks {
         let config = Config {
             port: "COM123".into(),
             enabled: false,
-            owl_path: Some(std::env::current_exe().unwrap().to_str().unwrap().into()),
+            bridge_path: Some(std::env::current_exe().unwrap().to_str().unwrap().into()),
             ..Config::default()
         };
         config.save(&config_path).unwrap();
@@ -244,7 +249,7 @@ mod checks {
         );
         assert!(
             server::listen(&pipe, true).is_err(),
-            "second server must fail before spawning OWL"
+            "second server must fail before spawning bridge"
         );
 
         let mut idle = connect(&pipe).await;
@@ -276,12 +281,9 @@ mod checks {
         let first = started(dir.path(), 1).await;
         assert_eq!(
             first["args"],
-            json!(["-i", "COM123", "-c", "6", "-N", "-F", "-E", "-S", "pin", "-T", "-v"])
+            json!(["--port", "COM123", "--channel", "6", "--managed"])
         );
-        assert_eq!(
-            Path::new(first["log"].as_str().unwrap()),
-            dir.path().join("owl.log")
-        );
+        assert!(dir.path().join("bridge-console.log").is_file());
         assert!(Config::load(&config_path).unwrap().enabled);
         request(&pipe, json!({"cmd":"start"})).await;
         let before = fs::read(&config_path).unwrap();
@@ -388,7 +390,54 @@ mod checks {
             .unwrap()
             .unwrap();
         assert_exited(&seventh);
+        rust_backend().await;
         sessions().await;
+    }
+
+    async fn rust_backend() {
+        use omdrop_service::{
+            platform::WindowsBackend,
+            supervisor::{Backend, ManagedProcess},
+        };
+        let dir = tempfile::tempdir().unwrap();
+        fs::copy(
+            std::env::current_exe().unwrap(),
+            dir.path().join("omdrop-bridge.exe"),
+        )
+        .unwrap();
+        let config = Config {
+            port: "COM126".into(),
+            ..Config::default()
+        };
+        let mut backend = WindowsBackend {
+            data_dir: dir.path().to_owned(),
+            default_bridge: dir.path().join("omdrop-bridge.exe"),
+        };
+        let mut child = backend.spawn(&config, &config.port).unwrap();
+        let start = started(dir.path(), 1).await;
+        assert_eq!(
+            start["args"],
+            json!(["--port", "COM126", "--channel", "6", "--managed"])
+        );
+        child.request_stop().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while child.exit_code().unwrap().is_none() {
+            assert!(
+                Instant::now() < deadline,
+                "Rust backend did not exit after stop event"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(dir
+            .path()
+            .join(format!("stopped-{}", start["pid"]))
+            .is_file());
+        assert_exited(&start);
+        drop(child);
+        let child = backend.spawn(&config, &config.port).unwrap();
+        let start = started(dir.path(), 2).await;
+        drop(child);
+        assert_exited(&start);
     }
 
     async fn sessions() {
@@ -401,7 +450,7 @@ mod checks {
         Config {
             port: "COM125".into(),
             enabled: true,
-            owl_path: Some(std::env::current_exe().unwrap().to_str().unwrap().into()),
+            bridge_path: Some(std::env::current_exe().unwrap().to_str().unwrap().into()),
             ..Config::default()
         }
         .save(&path)
@@ -548,7 +597,7 @@ mod checks {
         assert!(!dir.path().join("maintenance-failed").exists());
 
         // A real client process exits without a release message. The service reclaims
-        // its receive lane while the resident supervisor and OWL remain available.
+        // its receive lane while the resident supervisor and bridge remain available.
         let ready_file = dir.path().join("client-ready");
         let mut crashed = std::process::Command::new(std::env::current_exe().unwrap())
             .env("OMDROP_TEST_SESSION_PIPE", &pipe)

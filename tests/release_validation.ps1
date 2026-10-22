@@ -9,7 +9,7 @@ function Expect-Failure([scriptblock]$Action) {
     if (-not $failed) { throw 'Expected validation to reject this input.' }
 }
 try {
-    $names = @('omdrop-service.exe', 'owl.exe', 'wintun.dll', 'LICENSE', 'scripts/set-service-access.ps1',
+    $names = @('omdrop-cli.exe', 'LICENSE', 'scripts/set-service-access.ps1',
         'scripts/install-prebuilt.ps1', 'scripts/release-common.ps1', 'install.cmd', 'QUICKSTART.zh-CN.md',
         'licenses/dependencies.json', 'vcruntime140.dll', 'msvcp140.dll', 'licenses/visual-cpp-Redist.txt')
     $entries = @()
@@ -19,16 +19,16 @@ try {
         [IO.File]::WriteAllText($path, "fixture $name")
         $entries += @{ path = $name; length = (Get-Item -LiteralPath $path).Length; sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash }
     }
-    $manifest = @{ schemaVersion = 1; version = 'test'; platform = 'windows-x64'; runtime = 'Rust'; sourceRevision = ('a' * 40); files = $entries }
+    $manifest = @{ schemaVersion = 2; version = 'test'; platform = 'windows-x64'; runtime = 'Cli'; sourceRevision = ('a' * 40); files = $entries }
     [IO.File]::WriteAllText((Join-Path $directory 'release.json'), ($manifest | ConvertTo-Json -Depth 5))
     $null = Test-ReleasePackage $directory
-    foreach ($bad in @('../outside', 'scripts/../../outside', 'C:\Windows\file', '\\server\file', 'owl.exe:stream', 'scripts//file',
-        'owl.exe.', 'owl.exe ', 'NUL', 'con.txt', 'scripts/LPT1.log', 'star*.dll')) {
+    foreach ($bad in @('../outside', 'scripts/../../outside', 'C:\Windows\file', '\\server\file', 'omdrop-cli.exe:stream', 'scripts//file',
+        'omdrop-cli.exe.', 'omdrop-cli.exe ', 'NUL', 'con.txt', 'scripts/LPT1.log', 'star*.dll')) {
         Expect-Failure { Resolve-PackageFile $directory $bad }
     }
-    [IO.File]::AppendAllText((Join-Path $directory 'owl.exe'), 'tampered')
+    [IO.File]::AppendAllText((Join-Path $directory 'omdrop-cli.exe'), 'tampered')
     Expect-Failure { Test-ReleasePackage $directory }
-    [IO.File]::WriteAllText((Join-Path $directory 'owl.exe'), 'fixture owl.exe')
+    [IO.File]::WriteAllText((Join-Path $directory 'omdrop-cli.exe'), 'fixture omdrop-cli.exe')
     [IO.File]::WriteAllText((Join-Path $directory 'extra.exe'), 'unlisted')
     Expect-Failure { Test-ReleasePackage $directory }
     Remove-Item -LiteralPath (Join-Path $directory 'extra.exe')

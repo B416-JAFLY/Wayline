@@ -1,6 +1,8 @@
 # Rust workspace and independent firmware build output.
 /target/
 /firmware/target/
+/vendor/owly-awdl/target/
+/vendor/owly-airdrop/target/
 
 # ESP-IDF output and generated configuration; keep sdkconfig.defaults* tracked.
 /firmware/build/
@@ -12,8 +14,6 @@
 /firmware/managed_components/
 
 # OWL and local CMake build directories.
-/native/owl/build/
-/native/owl/build-*/
 cmake-build-*/
 CMakeUserPresets.json
 

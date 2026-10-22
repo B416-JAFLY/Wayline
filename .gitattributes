@@ -1,2 +1,0 @@
-# git apply needs patches byte-exact.
-*.patch text eol=lf

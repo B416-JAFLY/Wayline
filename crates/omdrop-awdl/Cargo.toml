@@ -1,0 +1,20 @@
+[package]
+name = "omdrop-awdl"
+version = "0.1.0"
+edition = "2021"
+description = "Windows/ESP32 AWDL bridge using Owly"
+license = "GPL-3.0-only"
+
+[dependencies]
+omdrop-proto = { path = "../omdrop-proto" }
+omdrop-radio = { path = "../omdrop-radio" }
+owly-awdl = { path = "../../vendor/owly-awdl", version = "=0.4.0", features = ["driver"] }
+serialport = "4"
+tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net", "io-util"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Memory", "Win32_System_Pipes", "Win32_System_IO"] }

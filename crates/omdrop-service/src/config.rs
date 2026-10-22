@@ -10,8 +10,7 @@ pub struct Config {
     pub channel: u16,
     #[serde(alias = "Enabled")]
     pub enabled: bool,
-    #[serde(alias = "OwlPath")]
-    pub owl_path: Option<String>,
+    pub bridge_path: Option<String>,
 }
 
 impl Default for Config {
@@ -20,7 +19,7 @@ impl Default for Config {
             port: "auto".into(),
             channel: 6,
             enabled: true,
-            owl_path: None,
+            bridge_path: None,
         }
     }
 }
@@ -34,9 +33,9 @@ impl Config {
                 "channel must be 6 (ESP32-S3), 44 or 149 (ESP32-C5)",
             ));
         }
-        if let Some(path) = &self.owl_path {
+        if let Some(path) = &self.bridge_path {
             if path.is_empty() || path.contains('\0') || !Path::new(path).is_absolute() {
-                return Err(invalid("owlPath must be an absolute executable path"));
+                return Err(invalid("bridgePath must be an absolute executable path"));
             }
         }
         Ok(())
@@ -98,6 +97,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bridge_path_is_optional_absolute_and_round_trips() {
+        let mut config: Config = serde_json::from_str("{}").unwrap();
+        assert!(config.bridge_path.is_none());
+        config.bridge_path = Some("relative.exe".into());
+        assert!(config.validate().is_err());
+        config.bridge_path = Some(
+            std::env::current_exe()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+        );
+        config.validate().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        config.save(&path).unwrap();
+        assert_eq!(Config::load(&path).unwrap(), config);
+    }
+    #[test]
     fn reads_pascal_case_config_with_utf8_bom_then_replaces_atomically() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
@@ -109,6 +126,7 @@ mod tests {
         let mut config = Config::load(&path).unwrap();
         assert_eq!(config.port, "COM4");
         assert!(!config.enabled);
+
         config.channel = 149;
         config.save(&path).unwrap();
         assert_eq!(Config::load(&path).unwrap(), config);
