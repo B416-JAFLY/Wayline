@@ -14,6 +14,9 @@ $flash = Get-Content -LiteralPath (Join-Path $build 'flasher_args.json') -Raw | 
 if ($record.formatVersion -ne 1 -or $record.argumentsSha256 -ine (Get-FileHash -LiteralPath (Join-Path $build 'flasher_args.json') -Algorithm SHA256).Hash) {
     throw 'The flash arguments do not belong to the recorded successful build.'
 }
+if ($record.target -ne 'esp32s3' -or $record.flashSize -ne '8MB') {
+    throw 'Only the validated ESP32-S3 / 8 MiB Cardputer Adv image can be packaged for desktop installation.'
+}
 if (@($record.images).Count -ne 3 -or @($flash.flash_files.PSObject.Properties).Count -ne 3) { throw 'Expected bootloader, partition table and application only.' }
 $images = @()
 $end = 0L

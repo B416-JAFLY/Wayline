@@ -71,19 +71,22 @@ class Link:
         return dict(zip(fields, struct.unpack("<6I", self.request(7, b"UI", expected=0x88))))
 
 
-def run(link, rounds, tx_frames, soak_seconds):
+def run(link, rounds, tx_frames, soak_seconds, target="esp32s3", five_ghz=False):
     hello = link.request(1, expected=0x81)
     assert len(hello) == 55 and hello[0] == 2
-    assert hello[7:23].rstrip(b"\0") == b"esp32s3"
+    assert hello[7:23].rstrip(b"\0") == target.encode()
     print(f"HELLO: proto 2, {mac_str(hello[1:7])}, {hello[23:].rstrip(bytes([0])).decode()}")
     assert link.request(3, hello[1:7]) == 0  # Wi-Fi stop/start + MAC reapply path.
     assert link.request(1, expected=0x81) == hello
-    for channel in [1, 11, 6]:
+    channels = [6] + ([44, 149] if five_ghz else [])
+    for channel in channels:
         assert link.request(2, bytes([channel])) == 0
     for mode in [1, 2, 0]:
         assert link.request(4, bytes([mode])) == 0
 
-    invalid = [(2, b"", 0x104), (2, b"\0", 0x102), (2, b"\x0f", 0x102),
+    invalid = [(2, b"", 0x104), (2, b"\0", 0x102), (2, b"\x01", 0x102),
+               (2, b"\x0e", 0x102), (2, b"\x0f", 0x102), (2, b"\x23", 0x102),
+               (2, b"\xa5", 0x102), (2, b"\xa6", 0x102),
                (3, bytes(5), 0x104), (4, b"", 0x104), (4, b"\x03", 0x102),
                (5, bytes(27), 0x104), (5, bytes([3]) + bytes(27), 0x102),
                (0xfe, b"", 0x106)]
@@ -151,14 +154,21 @@ def main():
     parser.add_argument("--tx-frames", type=int, default=0)
     parser.add_argument("--soak-seconds", type=int, default=0,
                         help="keep polling while UI/background tasks run")
+    parser.add_argument("--target", default="esp32s3", choices=["esp32s3", "esp32c5"])
+    parser.add_argument("--five-ghz", action="store_true",
+                        help="also test ESP32-C5 band/channel switching on 5 GHz")
     parser.add_argument("--check-ui", action="store_true",
                         help="verify Cardputer keyboard initialization and UI task liveness")
     args = parser.parse_args()
+    if args.five_ghz and args.target != "esp32c5":
+        parser.error("--five-ghz requires --target esp32c5")
+    if args.check_ui and args.target != "esp32s3":
+        parser.error("--check-ui is only supported by the ESP32-S3 Cardputer build")
     if args.rounds < 1 or args.tx_frames < 0 or args.soak_seconds < 0:
         parser.error("rounds must be positive; tx-frames and soak-seconds must be nonnegative")
     link = Link(args.port)
     try:
-        run(link, args.rounds, args.tx_frames, args.soak_seconds)
+        run(link, args.rounds, args.tx_frames, args.soak_seconds, args.target, args.five_ghz)
         if args.check_ui:
             before = link.ui_status()
             time.sleep(1)

@@ -5,7 +5,12 @@ service, AirDrop core and firmware use Rust; OWL provides AWDL.
 
 Supports Windows 10/11 x64 and M5Stack Cardputer Adv (ESP32-S3, native USB Serial/JTAG,
 2.4 GHz channel 6). The PC needs Bluetooth LE advertising; ESP32 handles Wi-Fi traffic.
-ESP32-C5 and 5 GHz are unsupported.
+
+A headless ESP32-C5 development build is available for UART0 and native USB Serial/JTAG boards.
+It switches at runtime between channel 6 (2.4 GHz) and channels 44 and 149 (5 GHz) on host
+request, and its raw transmit rate is fixed to HE20/MCS0. C5 AirDrop interoperability and
+throughput still need device validation. See the
+[development guide](docs/DEVELOPMENT.md#headless-esp32-c5-build) for building and flashing it.
 
 [中文说明](README.zh-CN.md) · [Quick start](docs/QUICKSTART.md) · [Development guide](docs/DEVELOPMENT.md)
 
@@ -20,7 +25,7 @@ ESP32-C5 and 5 GHz are unsupported.
   images and device startup before restoring readiness.
 - **Embedded application**: Rust ESP32-S3 application and three-language Cardputer UI,
   a shared allocation-free CRC/COBS protocol, C/C++ hardware drivers and simultaneous
-  send/receive feedback.
+  send/receive feedback. A headless ESP32-C5 profile reuses the same protocol layer.
 - **Builds and verification**: pinned OWL sources, patches and flashing tools, verified
   firmware and offline packages, host regression tests, protocol tests and UI previews.
 
@@ -79,8 +84,9 @@ scripts/build-release.ps1
 ```
 
 Outputs are in `native/owl/build` and `target/release`. For developer installation, run
-`scripts/install-service.ps1` in an administrator terminal. Firmware builds, tests and offline
-packaging are covered in the [development guide](docs/DEVELOPMENT.md).
+`scripts/install-service.ps1` in an administrator terminal. Firmware builds, including the
+headless ESP32-C5 build, tests and offline packaging are covered in the
+[development guide](docs/DEVELOPMENT.md).
 
 ## Source layout
 

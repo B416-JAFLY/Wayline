@@ -4,15 +4,15 @@ config OWL_RADIO_LINK_USB_SERIAL_JTAG
 	bool "Use the built-in USB Serial/JTAG port for the radio link"
 	default n
 	help
-		Select this for boards that expose the ESP32-S3 native USB
-		Serial/JTAG CDC port, such as the M5Stack Cardputer Adv. Leave it
-		disabled for boards using UART0 through a USB-UART bridge (CH343,
-		CP210x, or similar).
+		Select this for boards that expose a native USB Serial/JTAG CDC
+		port. Leave it disabled for ordinary development boards using
+		UART0 through a USB-UART bridge (CH343, CP210x, or similar).
 
 config OWL_CARDPUTER_UI
 	bool "Enable the Cardputer Adv screen and keyboard UI"
 	default n
 	depends on OWL_RADIO_LINK_USB_SERIAL_JTAG
+	depends on IDF_TARGET_ESP32S3
 	help
 		Adds Rust status, transfer feedback, sharing guidance and preferences
 		pages. M5Unified provides display, keyboard and sound hardware access.

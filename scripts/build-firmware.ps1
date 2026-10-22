@@ -1,11 +1,21 @@
-# Build Cardputer Adv firmware in an isolated output directory. Does not flash or stop services.
+# Build ESP32 radio firmware in an isolated output directory. Does not flash or stop services.
 [CmdletBinding()]
 param(
     [string]$IdfProfile,
+    [ValidateSet('esp32s3', 'esp32c5')]
+    [string]$Target = 'esp32s3',
+    [switch]$C5NativeUsb,
     [switch]$RxAggregation
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
+
+if ($RxAggregation -and $Target -ne 'esp32s3') {
+    throw '-RxAggregation is only supported by the audited ESP32-S3 build.'
+}
+if ($C5NativeUsb -and $Target -ne 'esp32c5') {
+    throw '-C5NativeUsb can only be used with -Target esp32c5.'
+}
 
 if ($IdfProfile) {
     . $IdfProfile
@@ -35,17 +45,51 @@ $idf = Join-Path $env:IDF_PATH 'tools\idf.py'
 if (-not (Test-Path -LiteralPath $python) -or -not (Test-Path -LiteralPath $idf)) {
     throw 'ESP-IDF Python environment is incomplete.'
 }
-& rustc +esp --version
-if ($LASTEXITCODE) { throw 'Install the Xtensa toolchain first: espup install --targets esp32s3 --std' }
+$rustTarget = if ($Target -eq 'esp32c5') { 'riscv32imac-esp-espidf' } else { 'xtensa-esp32s3-espidf' }
+$rustToolchain = 'esp'
+& rustc "+$rustToolchain" --version
+if ($LASTEXITCODE) { throw "Install the $rustToolchain ESP Rust toolchain first with espup." }
+$availableTargets = & rustc "+$rustToolchain" --print target-list
+if ($LASTEXITCODE -or -not ($availableTargets -contains $rustTarget)) {
+    throw "The $rustToolchain Rust toolchain does not provide $rustTarget. Install the target with espup before building."
+}
 
 $firmware = Join-Path $root 'firmware'
-$output = Join-Path $firmware 'build-rust'
-if ($RxAggregation) { $output = Join-Path $firmware 'build-rust-aggregation' }
+$outputName = if ($Target -eq 'esp32c5') {
+    $name = 'build-rust-esp32c5'
+    if ($C5NativeUsb) { $name += '-usb' }
+    $name
+} else {
+    'build-rust'
+}
+if ($RxAggregation) { $outputName = 'build-rust-aggregation' }
+$output = Join-Path $firmware $outputName
 $config = Join-Path $output 'sdkconfig'
-$defaults = 'sdkconfig.defaults;sdkconfig.defaults.cardputer'
+$defaults = if ($Target -eq 'esp32c5') {
+    'sdkconfig.defaults;sdkconfig.defaults.esp32c5'
+} else {
+    'sdkconfig.defaults;sdkconfig.defaults.cardputer'
+}
+if ($C5NativeUsb) { $defaults += ';sdkconfig.defaults.esp32c5-usb' }
 if ($RxAggregation) { $defaults += ';sdkconfig.defaults.aggregation' }
-& $python $idf -C $firmware -B $output -D IDF_TARGET=esp32s3 `
-    -D "SDKCONFIG=$config" -D "SDKCONFIG_DEFAULTS=$defaults" build
-if ($LASTEXITCODE) { throw 'Cardputer Rust firmware build failed.' }
-& (Join-Path $PSScriptRoot 'record-firmware-build.ps1') -BuildDirectory $output
+$previousComponentManager = $env:IDF_COMPONENT_MANAGER
+try {
+    $extraArguments = @()
+    if ($Target -eq 'esp32c5') {
+        # The headless C5 target does not use M5Unified; preserve the S3 lockfile.
+        $env:IDF_COMPONENT_MANAGER = '0'
+        $extraArguments = @('-D', 'EXCLUDE_COMPONENTS=m5stack__m5gfx;m5stack__m5unified')
+    }
+    & $python $idf -C $firmware -B $output -D IDF_TARGET=$Target `
+        -D "SDKCONFIG=$config" -D "SDKCONFIG_DEFAULTS=$defaults" @extraArguments build
+    $buildExitCode = $LASTEXITCODE
+} finally {
+    if ($null -eq $previousComponentManager) {
+        Remove-Item Env:IDF_COMPONENT_MANAGER -ErrorAction SilentlyContinue
+    } else {
+        $env:IDF_COMPONENT_MANAGER = $previousComponentManager
+    }
+}
+if ($buildExitCode) { throw "$Target Rust firmware build failed." }
+& (Join-Path $PSScriptRoot 'record-firmware-build.ps1') -BuildDirectory $output -Target $Target
 Write-Host "Firmware: $(Join-Path $output 'owl-radio.bin')"

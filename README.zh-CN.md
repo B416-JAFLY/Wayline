@@ -2,7 +2,9 @@
 
 通过 USB 连接的 ESP32，在 Windows 与 Apple 设备之间收发 AirDrop 文件。桌面应用、服务、AirDrop 核心和固件使用 Rust，AWDL 由 OWL 提供。
 
-支持 Windows 10/11 x64 和 M5Stack Cardputer Adv（ESP32-S3、原生 USB Serial/JTAG、2.4 GHz 信道 6）。电脑需要蓝牙 LE 广播能力，Wi-Fi 收发由 ESP32 承担；不支持 ESP32-C5 和 5 GHz。
+支持 Windows 10/11 x64 和 M5Stack Cardputer Adv（ESP32-S3、原生 USB Serial/JTAG、2.4 GHz 信道 6）。电脑需要蓝牙 LE 广播能力，Wi-Fi 收发由 ESP32 承担。
+
+另提供无屏幕的 ESP32-C5 开发板构建，可用于经 USB-UART 桥接的 UART0 和原生 USB Serial/JTAG 开发板。固件按主机请求在 2.4 GHz 信道 6 与 5 GHz 信道 44、149 之间运行时切换，原始发送速率固定为 HE20/MCS0。C5 的 AirDrop 互通与吞吐仍需实机验证，构建与刷写见[开发指南](docs/DEVELOPMENT.zh-CN.md#无屏幕-esp32-c5-构建)。
 
 [English](README.md) · [快速开始](docs/QUICKSTART.zh-CN.md) · [开发指南](docs/DEVELOPMENT.zh-CN.md)
 
@@ -11,7 +13,7 @@
 - **原生桌面与系统集成**：使用 GPUI 构建收发界面，接入托盘、文件右键与资源管理器拖放；普通权限 UI 与高权限服务分离，兼顾桌面交互和设备管理。
 - **Rust 收发核心**：将设备发现、TLS/HTTP 和 CPIO/DVZip 编解码组织为桌面与 CLI 共用的模块，采用流式处理、归档校验和最终确认，支持取消与失败清理。
 - **服务与固件维护**：通过命名管道和会话租约协调多个客户端，管理 OWL 生命周期与串口互斥；烧录期间隔离无线任务，写入后执行镜像校验和启动检查。
-- **嵌入式应用**：使用 Rust 实现 ESP32-S3 应用与 Cardputer 三语言界面，共享无堆分配的 CRC/COBS 协议；C/C++ 层封装硬件驱动，板端显示双向传输状态。
+- **嵌入式应用**：使用 Rust 实现 ESP32-S3 应用与 Cardputer 三语言界面，共享无堆分配的 CRC/COBS 协议；C/C++ 层封装硬件驱动，板端显示双向传输状态。无屏幕的 ESP32-C5 构建复用同一协议层。
 - **构建与验证**：固定 OWL 源码、补丁和烧录工具版本，校验固件及离线发布包，提供主机回归测试、协议测试和界面预览工具。
 
 ## 界面与收发演示
@@ -56,7 +58,7 @@ scripts/build-owl.ps1
 scripts/build-release.ps1
 ```
 
-输出位于 `native/owl/build` 和 `target/release`。开发者安装使用管理员终端运行 `scripts/install-service.ps1`；固件构建、测试和离线打包见[开发指南](docs/DEVELOPMENT.zh-CN.md)。
+输出位于 `native/owl/build` 和 `target/release`。开发者安装使用管理员终端运行 `scripts/install-service.ps1`；固件构建（含无屏幕的 ESP32-C5 构建）、测试和离线打包见[开发指南](docs/DEVELOPMENT.zh-CN.md)。
 
 ## 目录结构
 

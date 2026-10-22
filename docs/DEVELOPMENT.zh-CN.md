@@ -10,7 +10,7 @@
 | --- | --- |
 | Windows 应用 | Git、Rust MSVC、Visual Studio C++ Build Tools、Windows SDK（含 `fxc.exe`） |
 | OWL | PATH 中的 MinGW-w64 GCC 和 Git，以及 CMake、Ninja |
-| 固件 | ESP-IDF 6.0，以及通过 `espup` 安装的 ESP32-S3 Xtensa 工具链 |
+| 固件 | ESP-IDF 6.0，以及通过 `espup` 安装的 ESP32-S3 Xtensa 工具链；ESP32-C5 构建另需 RISC-V 目标 |
 
 先构建 OWL，再构建主机应用：
 
@@ -63,6 +63,26 @@ python tests/firmware_regression.py -p COM4
 ```
 
 刷写包含 bootloader、分区表和应用。若设备停在下载模式，松开 G0 后点按 RST。完成后重新打开桌面以恢复无线服务。
+
+### 无屏幕 ESP32-C5 构建
+
+ESP32-C5 构建为无屏幕配置：不包含 M5Unified 和 Cardputer 界面，使用 RISC-V 目标，并输出到独立目录。
+
+```powershell
+espup install --targets esp32s3,esp32c5
+scripts/build-firmware.ps1 -Target esp32c5
+```
+
+默认镜像通过板载 USB-UART 桥的 UART0 以 3 Mbaud 通信，输出到 `firmware/build-rust-esp32c5/`。开发板将原生 USB Serial/JTAG 接到主机时加 `-C5NativeUsb`，此时输出到 `firmware/build-rust-esp32c5-usb/`。这些构建关闭组件管理，ESP32-S3 的 `firmware/dependencies.lock` 保持不变。C5 镜像不进入桌面固件包，需用 ESP-IDF 和对应构建目录刷写：
+
+```powershell
+$fw = (Resolve-Path firmware).Path
+$out = Join-Path $fw 'build-rust-esp32c5'
+idf.py -C $fw -B $out -D IDF_TARGET=esp32c5 -D "SDKCONFIG=$out\sdkconfig" -p COM4 flash
+python tests/firmware_regression.py -p COM4 --target esp32c5 --five-ghz
+```
+
+镜像启动时使用 2.4 GHz 信道 6；主机在 `%ProgramData%\omdrop-owl\config.json` 中把 `channel` 改为 44 或 149 后切换到 5 GHz，修改后重启服务。ESP-IDF 6.0 要求在启动 Wi-Fi 前固定原始发送速率，因此 C5 构建固定 HE20/MCS0 并忽略逐帧速率提示。AirDrop 互通与吞吐仍需实机验证。
 
 ## 桌面应用
 
@@ -182,7 +202,7 @@ python tests/firmware_regression.py -p COM4
 {"port":"auto","channel":6,"enabled":true,"owlPath":null}
 ```
 
-`port` 接受 `auto` 或 COM 端口，ESP32-S3 使用信道 6。`owlPath` 为绝对路径，null 表示服务旁的 `owl.exe`。日志为 `service.log`、`owl.log` 和 `owl-console.log`。
+`port` 接受 `auto` 或 COM 端口，ESP32-S3 使用信道 6；ESP32-C5 还可使用 5 GHz 的 AWDL 信道 44 和 149。`owlPath` 为绝对路径，null 表示服务旁的 `owl.exe`。日志为 `service.log`、`owl.log` 和 `owl-console.log`。
 
 桌面安装使用 `--service --on-demand`；`scripts/install-service.ps1 -Runtime Rust` 安装自动启动、带 `--resident` 的独立服务。两个服务入口均支持这两种生命周期模式，默认常驻。`-Uninstall` 移除服务注册，保留安装文件。
 
@@ -255,7 +275,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/installer_service_
 
 Rust 负责协议分帧、RX/TX、过滤、计数器、对端跟踪、界面与翻译。`firmware/components/radio/radio_hal.c` 封装 ESP-IDF，`radio_ui.cpp` 封装 M5Unified 显示、键盘、音频、背光和 NVS。共享 C 定义位于 `crates/omdrop-proto/include/proto.h`，主机与固件布局必须一致。
 
-固件不使用动态内存分配。短状态访问使用自旋锁，无线配置和 USB 输出使用独立互斥锁；阻塞驱动调用必须在状态自旋锁之外。界面采用静态 240×135 RGB565 帧缓冲，`ui_orb.rs` 使用有界定点几何。隐藏页面、传输卡片、熄屏或关闭动效时暂停动画。板载操作见[快速开始](QUICKSTART.zh-CN.md#板载界面)。
+固件不使用动态内存分配。ESP32-S3 构建使用 Xtensa 工具链，ESP32-C5 使用 ESP RISC-V 工具链。短状态访问使用自旋锁，无线配置和 USB 输出使用独立互斥锁；阻塞驱动调用必须在状态自旋锁之外。界面采用静态 240×135 RGB565 帧缓冲，`ui_orb.rs` 使用有界定点几何。隐藏页面、传输卡片、熄屏或关闭动效时暂停动画。板载操作见[快速开始](QUICKSTART.zh-CN.md#板载界面)。
 
 ### 预览与翻译
 

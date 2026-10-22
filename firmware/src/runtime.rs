@@ -35,6 +35,7 @@ static UI_KEYS: AtomicU32 = AtomicU32::new(0);
 extern "C" {
     fn owl_hal_init();
     fn owl_hal_radio_init(mac: *mut u8);
+    fn owl_hal_default_channel() -> u8;
     fn owl_hal_apply(channel: u8, filter: u8) -> i32;
     fn owl_hal_set_channel(channel: u8) -> i32;
     fn owl_hal_set_mac(mac: *const u8, actual: *mut u8, channel: u8, filter: u8) -> i32;
@@ -672,12 +673,16 @@ pub extern "C" fn owl_radio_ui_task(_arg: *mut c_void) {
 #[no_mangle]
 pub extern "C" fn owl_radio_main() {
     let mut mac = [0; 6];
+    let channel = unsafe { owl_hal_default_channel() };
     unsafe {
         owl_hal_init();
         owl_hal_radio_init(mac.as_mut_ptr());
     }
-    with_state(|s| s.mac = mac);
-    assert_eq!(unsafe { owl_hal_apply(6, FilterMode::Awdl as u8) }, 0);
+    with_state(|s| {
+        s.mac = mac;
+        s.channel = channel;
+    });
+    assert_eq!(unsafe { owl_hal_apply(channel, FilterMode::Awdl as u8) }, 0);
     unsafe { owl_hal_start_tasks() };
     send(RadioMessage::Log, b"owl-radio up (Rust + ESP-IDF)", &[]);
 }

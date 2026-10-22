@@ -30,7 +30,20 @@ _Static_assert(offsetof(radio_ui_peer_t, last_seen_ms) == 12, "Rust Peer.last_se
 static RingbufHandle_t rx_ring;
 static SemaphoreHandle_t tx_lock, config_lock;
 static portMUX_TYPE state_lock = portMUX_INITIALIZER_UNLOCKED;
+#if !CONFIG_IDF_TARGET_ESP32C5
 static int current_rate = -1;
+#else
+#define OWL_C5_DEFAULT_CHANNEL 6
+static uint8_t current_channel = OWL_C5_DEFAULT_CHANNEL;
+static bool c5_promiscuous_enabled;
+
+static esp_err_t c5_set_promiscuous(bool enabled)
+{
+	esp_err_t err = esp_wifi_set_promiscuous(enabled);
+	if (err == ESP_OK) c5_promiscuous_enabled = enabled;
+	return err;
+}
+#endif
 static uint32_t link_core;
 
 #if CONFIG_OWL_RADIO_LINK_USB_SERIAL_JTAG && !CONFIG_FREERTOS_UNICORE
@@ -65,6 +78,21 @@ void owl_hal_tx_unlock(void) { xSemaphoreGive(tx_lock); }
 void owl_hal_config_lock(void) { xSemaphoreTake(config_lock, portMAX_DELAY); }
 bool owl_hal_config_try_lock(void) { return xSemaphoreTake(config_lock, 0) == pdTRUE; }
 void owl_hal_config_unlock(void) { xSemaphoreGive(config_lock); }
+
+#if CONFIG_IDF_TARGET_ESP32C5
+static esp_err_t configure_c5_tx_rate(void)
+{
+	/* ESP-IDF 6.0 requires this fixed C5 PHY/rate configuration before start.
+	 * HE20/MCS0 works on both bands; host per-frame rates are ignored. */
+	wifi_tx_rate_config_t config = {
+		.phymode = WIFI_PHY_MODE_HE20,
+		.rate = WIFI_PHY_RATE_MCS0_LGI,
+		.ersu = false,
+		.dcm = false,
+	};
+	return esp_wifi_config_80211_tx(WIFI_IF_STA, &config);
+}
+#endif
 
 static void promisc_cb(void *buffer, wifi_promiscuous_pkt_type_t type)
 {
@@ -136,10 +164,56 @@ void owl_hal_radio_init(uint8_t mac[6])
 	ESP_ERROR_CHECK(esp_wifi_init(&config));
 	ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
 	ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+#if CONFIG_IDF_TARGET_ESP32C5
+	ESP_ERROR_CHECK(configure_c5_tx_rate());
+#endif
 	ESP_ERROR_CHECK(esp_wifi_start());
+#if CONFIG_IDF_TARGET_ESP32C5
+	ESP_ERROR_CHECK(esp_wifi_set_band_mode(WIFI_BAND_MODE_2G_ONLY));
+#endif
 	ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 	ESP_ERROR_CHECK(esp_wifi_get_mac(WIFI_IF_STA, mac));
 	ESP_ERROR_CHECK(esp_wifi_register_80211_tx_cb(tx_done_cb));
+}
+
+static esp_err_t set_channel_for_band(uint8_t channel)
+{
+#if CONFIG_IDF_TARGET_ESP32C5
+	if (channel != 6 && channel != 44 && channel != 149) return ESP_ERR_INVALID_ARG;
+	wifi_band_mode_t next = channel == 6 ? WIFI_BAND_MODE_2G_ONLY : WIFI_BAND_MODE_5G_ONLY;
+	wifi_band_mode_t previous = current_channel == 6 ? WIFI_BAND_MODE_2G_ONLY
+	                                                 : WIFI_BAND_MODE_5G_ONLY;
+	bool changed = next != previous;
+	bool resume_promiscuous = c5_promiscuous_enabled;
+	esp_err_t err = changed && resume_promiscuous ? c5_set_promiscuous(false) : ESP_OK;
+	if (err != ESP_OK) return err;
+	if (changed) {
+		err = esp_wifi_set_band_mode(next);
+		if (err != ESP_OK) {
+			if (resume_promiscuous) (void)c5_set_promiscuous(true);
+			return err;
+		}
+	}
+	err = esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
+	if (err != ESP_OK && changed) {
+		(void)esp_wifi_set_band_mode(previous);
+		(void)esp_wifi_set_channel(current_channel, WIFI_SECOND_CHAN_NONE);
+	}
+	if (changed && resume_promiscuous) {
+		esp_err_t resume = c5_set_promiscuous(true);
+		if (resume != ESP_OK) {
+			if (err == ESP_OK) {
+				(void)esp_wifi_set_band_mode(previous);
+				(void)esp_wifi_set_channel(current_channel, WIFI_SECOND_CHAN_NONE);
+			}
+			err = resume;
+		}
+	}
+	return err;
+#else
+	if (channel > 14) return ESP_ERR_INVALID_ARG;
+	return esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
+#endif
 }
 
 int32_t owl_hal_apply(uint8_t channel, uint8_t filter)
@@ -154,29 +228,75 @@ int32_t owl_hal_apply(uint8_t channel, uint8_t filter)
 	ESP_ERROR_CHECK(esp_wifi_set_promiscuous_filter(&f));
 	ESP_ERROR_CHECK(esp_wifi_set_promiscuous_ctrl_filter(&cf));
 	ESP_ERROR_CHECK(esp_wifi_set_promiscuous_rx_cb(promisc_cb));
+	esp_err_t channel_error;
+#if CONFIG_IDF_TARGET_ESP32C5
+	channel_error = set_channel_for_band(channel);
+	if (channel_error == ESP_OK && !c5_promiscuous_enabled) {
+		channel_error = c5_set_promiscuous(true);
+	}
+	#else
 	ESP_ERROR_CHECK(esp_wifi_set_promiscuous(true));
-	return esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
+	channel_error = set_channel_for_band(channel);
+#endif
+	if (channel_error == ESP_OK) {
+	#if CONFIG_IDF_TARGET_ESP32C5
+		current_channel = channel;
+	#else
+		current_rate = -1;
+	#endif
+	}
+	return channel_error;
 }
 
 int32_t owl_hal_set_channel(uint8_t channel)
 {
-	return esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
+	esp_err_t channel_error = set_channel_for_band(channel);
+	if (channel_error == ESP_OK) {
+	#if CONFIG_IDF_TARGET_ESP32C5
+		current_channel = channel;
+	#else
+		current_rate = -1;
+	#endif
+	}
+	return channel_error;
 }
 
 int32_t owl_hal_set_mac(const uint8_t mac[6], uint8_t actual_mac[6], uint8_t channel, uint8_t filter)
 {
+#if CONFIG_IDF_TARGET_ESP32C5
+	if (c5_promiscuous_enabled) (void)c5_set_promiscuous(false);
+#else
 	esp_wifi_set_promiscuous(false);
+#endif
 	esp_wifi_stop();
 	esp_err_t err = esp_wifi_set_mac(WIFI_IF_STA, mac);
-	ESP_ERROR_CHECK(esp_wifi_start());
+#if CONFIG_IDF_TARGET_ESP32C5
+	ESP_ERROR_CHECK(configure_c5_tx_rate());
+#else
 	current_rate = -1; /* Restarting Wi-Fi resets the driver's rate selection. */
+#endif
+	ESP_ERROR_CHECK(esp_wifi_start());
+#if CONFIG_IDF_TARGET_ESP32C5
+	ESP_ERROR_CHECK(esp_wifi_set_band_mode(current_channel == 6 ? WIFI_BAND_MODE_2G_ONLY
+	                                                          : WIFI_BAND_MODE_5G_ONLY));
+#endif
 	ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 	ESP_ERROR_CHECK(esp_wifi_get_mac(WIFI_IF_STA, actual_mac));
 	esp_err_t apply_error = owl_hal_apply(channel, filter);
 	return err == ESP_OK ? apply_error : err;
 }
 
+uint8_t owl_hal_default_channel(void)
+{
+#if CONFIG_IDF_TARGET_ESP32C5
+	return OWL_C5_DEFAULT_CHANNEL;
+#else
+	return 6;
+#endif
+}
+
 /* Portable protocol rate -> chip-specific IDF enum. */
+#if !CONFIG_IDF_TARGET_ESP32C5
 static int phy_rate(uint8_t rate)
 {
 	if (rate & RATE_MCS) {
@@ -200,9 +320,17 @@ static int phy_rate(uint8_t rate)
 	default: return -1;
 	}
 }
+#endif
 
 int32_t owl_hal_transmit(uint8_t rate, const uint8_t *frame, size_t len)
 {
+#if CONFIG_IDF_TARGET_ESP32C5
+	/* C5 uses its fixed HE20/MCS0 profile configured before Wi-Fi starts. IDF's
+	 * raw-TX API limits frames to 1500 bytes. */
+	(void)rate;
+	if (len < 24 || len > 1500) return ESP_ERR_INVALID_ARG;
+	return esp_wifi_80211_tx(WIFI_IF_STA, frame, len, false);
+#else
 	int phy = phy_rate(rate);
 	if (phy < 0) return ESP_ERR_INVALID_ARG;
 	if (phy != current_rate) {
@@ -211,6 +339,7 @@ int32_t owl_hal_transmit(uint8_t rate, const uint8_t *frame, size_t len)
 		if (err != ESP_OK) return err;
 	}
 	return esp_wifi_80211_tx(WIFI_IF_STA, frame, len, false);
+#endif
 }
 
 size_t owl_hal_read(uint8_t *out, size_t cap)

@@ -362,9 +362,12 @@ def cmd_ack_test(radio, args):
         ap, ch = bytes.fromhex(args.bssid.replace(":", "")), args.channel
         radio._ssid = args.ssid.encode()
     else:
-        aps = scan(radio, range(1, 14))
+        channels = [6]
+        if radio.hello["target"] == "esp32c5":
+            channels += [44, 149]
+        aps = scan(radio, channels)
         if not aps:
-            raise SystemExit("no access points heard on 2.4 GHz")
+            raise SystemExit(f"no access points heard on radio channels {channels}")
         for b, a in sorted(aps.items(), key=lambda kv: -statistics.median(kv[1]["rssi"])):
             print(f"  {mac_str(b)} ch{a['ch']:<3} {statistics.median(a['rssi']):>4.0f} dBm  {a['ssid']}")
         ap, info = max(aps.items(), key=lambda kv: statistics.median(kv[1]["rssi"]))

@@ -33,6 +33,11 @@ pub struct TxRequest<'a> {
     pub frame: &'a [u8],
 }
 
+/// 2.4 GHz diagnostic channels and the fixed 5 GHz AWDL channels supported by the host.
+pub fn valid_channel(channel: u8) -> bool {
+    matches!(channel, 1..=14 | 44 | 149)
+}
+
 pub fn parse_command(message: &[u8]) -> Result<Command<'_>, i32> {
     let (&kind, body) = message.split_first().ok_or(INVALID_SIZE)?;
     Ok(match HostMessage::from_byte(kind).ok_or(NOT_SUPPORTED)? {
@@ -63,7 +68,7 @@ pub fn parse_command(message: &[u8]) -> Result<Command<'_>, i32> {
         }
         HostMessage::SetChannel => {
             let &channel = body.first().ok_or(INVALID_SIZE)?;
-            if !(1..=14).contains(&channel) {
+            if !valid_channel(channel) {
                 return Err(INVALID_ARG);
             }
             Command::SetChannel(channel)
@@ -213,8 +218,15 @@ mod tests {
             assert_eq!(parse_command(&[kind]), Err(INVALID_SIZE));
         }
         assert_eq!(parse_command(&[0xfe]), Err(NOT_SUPPORTED));
-        for channel in [0, 15, 255] {
+        for channel in [0, 15, 35, 36, 165, 255] {
             assert_eq!(parse_command(&[2, channel]), Err(INVALID_ARG));
+        }
+        for channel in [1, 6, 14, 44, 149] {
+            assert!(valid_channel(channel));
+            assert_eq!(
+                parse_command(&[2, channel]),
+                Ok(Command::SetChannel(channel))
+            );
         }
         assert_eq!(parse_command(&[4, 3]), Err(INVALID_ARG));
         let mut message = [0; 5 + PROTO_MAX_FRAME + 1];

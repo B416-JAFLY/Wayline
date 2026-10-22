@@ -6,6 +6,7 @@
 
 void owl_hal_init(void);
 void owl_hal_radio_init(uint8_t mac[6]);
+uint8_t owl_hal_default_channel(void);
 int32_t owl_hal_apply(uint8_t channel, uint8_t filter);
 int32_t owl_hal_set_channel(uint8_t channel);
 int32_t owl_hal_set_mac(const uint8_t mac[6], uint8_t actual_mac[6], uint8_t channel, uint8_t filter);

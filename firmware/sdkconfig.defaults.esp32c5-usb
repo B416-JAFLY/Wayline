@@ -1,0 +1,5 @@
+# Use the chip's native USB Serial/JTAG controller as the binary radio link.
+# Select this when the development board routes that controller to its USB port.
+CONFIG_OWL_RADIO_LINK_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_NONE=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y

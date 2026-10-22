@@ -1,0 +1,9 @@
+# Generic ESP32-C5 development boards use UART0 through their USB-UART bridge.
+# The binary radio protocol owns the port, so ESP-IDF console output is disabled.
+CONFIG_ESP_CONSOLE_NONE=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+# Keep the radio/runtime settings explicit for a standalone C5 build.
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=64
+CONFIG_ESP_WIFI_NVS_ENABLED=n
+CONFIG_FREERTOS_HZ=1000

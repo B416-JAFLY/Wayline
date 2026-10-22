@@ -12,7 +12,7 @@ For installation and daily use, see the [quick start](QUICKSTART.md).
 | --- | --- |
 | Windows apps | Git, Rust MSVC, Visual Studio C++ Build Tools, Windows SDK including `fxc.exe` |
 | OWL | MinGW-w64 GCC and Git on PATH; CMake and Ninja |
-| Firmware | ESP-IDF 6.0 and the ESP32-S3 Xtensa toolchain installed with `espup` |
+| Firmware | ESP-IDF 6.0 and the ESP32-S3 Xtensa toolchain installed with `espup`; the ESP32-C5 build adds its RISC-V target |
 
 Build OWL before the host applications:
 
@@ -78,6 +78,36 @@ python tests/firmware_regression.py -p COM4
 
 Flashing writes bootloader, partition table and application. If the board remains in download
 mode, release G0 and press RST. Reopen desktop afterwards to restore wireless operation.
+
+### Headless ESP32-C5 build
+
+The ESP32-C5 profile is headless: it excludes M5Unified and the Cardputer UI, uses the RISC-V
+target and writes to its own build directory.
+
+```powershell
+espup install --targets esp32s3,esp32c5
+scripts/build-firmware.ps1 -Target esp32c5
+```
+
+The default image uses UART0 behind the board's USB-UART bridge at 3 Mbaud; output is
+`firmware/build-rust-esp32c5/`. Pass `-C5NativeUsb` when the board wires its native USB
+Serial/JTAG controller to the host; that image is written to `firmware/build-rust-esp32c5-usb/`.
+Component management stays disabled so the ESP32-S3 `firmware/dependencies.lock` is unchanged.
+The C5 image is not packaged for desktop installation; flash it with ESP-IDF and the matching
+build directory:
+
+```powershell
+$fw = (Resolve-Path firmware).Path
+$out = Join-Path $fw 'build-rust-esp32c5'
+idf.py -C $fw -B $out -D IDF_TARGET=esp32c5 -D "SDKCONFIG=$out\sdkconfig" -p COM4 flash
+python tests/firmware_regression.py -p COM4 --target esp32c5 --five-ghz
+```
+
+The image starts on 2.4 GHz channel 6 and switches to 5 GHz channel 44 or 149 when the host
+changes `channel` in `%ProgramData%\omdrop-owl\config.json`; restart the service after editing
+the file. ESP-IDF 6.0 requires the raw transmit rate before Wi-Fi starts, so the C5 build fixes
+HE20/MCS0 and ignores per-frame rate hints. AirDrop interoperability and throughput need
+validation on the actual board.
 
 ## Desktop
 
@@ -247,8 +277,9 @@ Configuration is `%ProgramData%\omdrop-owl\config.json`; writes are atomic:
 {"port":"auto","channel":6,"enabled":true,"owlPath":null}
 ```
 
-`port` accepts `auto` or a COM port. Use channel 6 for ESP32-S3. `owlPath` is absolute,
-or null for `owl.exe` beside the service. Logs are `service.log`, `owl.log` and `owl-console.log`.
+`port` accepts `auto` or a COM port. Use channel 6 for ESP32-S3; ESP32-C5 can also use AWDL
+channels 44 and 149 in the 5 GHz band. `owlPath` is absolute, or null for `owl.exe` beside the
+service. Logs are `service.log`, `owl.log` and `owl-console.log`.
 
 Desktop installs `--service --on-demand`. `scripts/install-service.ps1 -Runtime Rust` installs
 the standalone service with automatic startup and `--resident`. Both service entry points
@@ -357,7 +388,8 @@ Rust owns protocol framing, RX/TX, filtering, counters, peer tracking, UI and lo
 keyboard, audio, backlight and NVS. Shared C definitions are
 `crates/omdrop-proto/include/proto.h`; keep host and firmware layouts aligned.
 
-The firmware is allocation-free. Short state accesses use a spinlock; radio configuration and
+The firmware is allocation-free. ESP32-S3 builds use the Xtensa toolchain and ESP32-C5 uses the
+ESP RISC-V toolchain. Short state accesses use a spinlock; radio configuration and
 USB output use separate mutexes. Keep blocking driver calls outside the state spinlock.
 UI uses a static 240×135 RGB565 framebuffer; `ui_orb.rs` uses bounded fixed-point geometry.
 Animation pauses on hidden pages, transfer cards, sleep or disabled motion.
