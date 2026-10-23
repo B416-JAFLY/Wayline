@@ -142,6 +142,8 @@ python tests/firmware_regression.py -p COM4 --target esp32c5 --five-ghz
 
 名称、接收目录、界面语言和身份保存在 `%LOCALAPPDATA%\omdrop`。`desktop.json` 在进程锁下原子写入并保留未知设置；身份创建和 `receiver-services.json` 中的广播更名记录也受锁保护。`download_directory` 默认指向 Downloads/Omdrop，更改时不移动已有文件，接收期间禁止更改。`language` 保存 `zh-CN`、`zh-TW`、`en-US`、`ja-JP`、`ko-KR`、`fr-FR`、`de-DE` 或 `es-ES`；缺少该字段时按 Windows 界面语言选择，不支持的系统语言回退到 English。切换语言会立即更新窗口、托盘、系统对话框和通知，并重新注册资源管理器入口。界面文案位于 `apps/desktop/locales/*.toml`（当前 8 种语言），`apps/desktop/build.rs` 在构建时校验所有语言的键集合与占位符并生成静态文案表；新增语言时需要同时添加 TOML、`Language` 枚举项和 `build.rs` 构建列表，并保持全部翻译完整。共享模块（传输、烧录和本地设置校验）的底层错误详情仍按原文显示。完整接收错误写入 `desktop-receiver.log`。
 
+活动发送与接收卡片按进度事件显示平滑速度，进度停滞一秒后速度归零。最近 200 条传输记录单独保存在 `%LOCALAPPDATA%\omdrop\transfer-history.json`，使用进程锁和原子替换；成功只在最终协议确认后记入。记录包含原始文件字节数和传输流字节数，不保存文件内容或发送端路径；接收目录只保存在成功接收记录中。清空记录不会删除接收文件。
+
 接收须经用户确认，完成须通过归档校验和最终协议回应。固件维护会暂停空闲接收器；活动传输或其他接收器会阻止维护。取消或退出时，等待烧录子进程结束后再释放设备。
 
 ### 界面预览与资源

@@ -20,6 +20,7 @@ const MUTED: u32 = 0xa0a0a8;
 const SURFACE: u32 = 0x27272b;
 enum ExitState {
     Stopping,
+    FlushingHistory(bool),
     Failed(String),
 }
 
@@ -34,6 +35,7 @@ pub struct Capsule {
     cancel: Option<SendCancellation>,
     scan_cancel: Option<SendCancellation>,
     workers: Vec<std::thread::JoinHandle<()>>,
+    history_thread: Option<std::thread::JoinHandle<()>>,
     firmware: crate::firmware::Model,
     firmware_cancel: Option<omdrop_flash::Cancellation>,
     firmware_worker: Option<std::thread::JoinHandle<()>>,
@@ -41,6 +43,12 @@ pub struct Capsule {
     name_input: Option<Entity<crate::name_input::NameInput>>,
     name_input_subscription: Option<Subscription>,
     settings_open: bool,
+    history_open: bool,
+    history: Vec<omdrop_host::TransferHistoryRecord>,
+    history_loaded: bool,
+    history_error: Option<String>,
+    history_clear_until: Option<Instant>,
+    history_worker: Option<crate::history::StoreWorker>,
     language_menu_open: bool,
     settings_error: Option<String>,
     radio_channel_pending: Option<u16>,
@@ -88,6 +96,7 @@ impl Capsule {
             }
         };
         let (tx, rx) = mpsc::channel();
+        let (history_worker, history_thread) = crate::history::StoreWorker::start(tx.clone());
         let (action_tx, actions) = mpsc::channel();
         if !files.is_empty() {
             let _ = action_tx.send(Action::Files(files));
@@ -133,6 +142,7 @@ impl Capsule {
             cancel: None,
             scan_cancel: None,
             workers: Vec::new(),
+            history_thread: Some(history_thread),
             firmware: crate::firmware::Model::default(),
             firmware_cancel: None,
             firmware_worker: None,
@@ -140,6 +150,12 @@ impl Capsule {
             name_input: None,
             name_input_subscription: None,
             settings_open: false,
+            history_open: false,
+            history: Vec::new(),
+            history_loaded: false,
+            history_error: None,
+            history_clear_until: None,
+            history_worker: Some(history_worker),
             language_menu_open: false,
             settings_error,
             radio_channel_pending: None,
@@ -170,16 +186,73 @@ impl Capsule {
         if self.exit_state.is_some() {
             // No late status, picker or discovery callback may restart work
             // while the receiver and radio service are being shut down.
+            let mut shutdown_result = None;
             for event in events {
                 match event {
                     Event::ShutdownDone(Ok(background_running)) => {
-                        if background_running && let Some(shell) = &self.shell {
+                        shutdown_result = Some(background_running);
+                        continue;
+                    }
+                    Event::HistoryFlushed => {
+                        let background_running =
+                            matches!(self.exit_state, Some(ExitState::FlushingHistory(true)));
+                        if let Some(shell) = &self.shell
+                            && let Some(error) = &self.history_error
+                        {
+                            shell.notify(self.language.strings().history_title, error);
+                        } else if background_running && let Some(shell) = &self.shell {
                             let text = self.language.strings();
                             shell.notify(text.app_exited_title, text.app_exited_detail);
                         }
                         cx.quit();
                         return;
                     }
+                    Event::SendDone(id, result) => {
+                        if let Some(record) = self.model.take_history_record(
+                            id,
+                            &result,
+                            Instant::now(),
+                            crate::history::unix_time_ms(std::time::SystemTime::now()),
+                        ) && let Some(worker) = &self.history_worker
+                        {
+                            worker.append(record, Vec::new());
+                        }
+                        let _ = self.model.apply(Event::SendDone(id, result));
+                    }
+                    Event::Transfer(id, event) => {
+                        let _ = self.model.apply(Event::Transfer(id, event));
+                    }
+                    Event::ReceiverActivity(event) => {
+                        let record = self.receive.history_record_for_event(
+                            &event,
+                            Instant::now(),
+                            crate::history::unix_time_ms(std::time::SystemTime::now()),
+                        );
+                        let received_files = match &event {
+                            omdrop_core::ReceiverEvent::Received { files, .. } => files.clone(),
+                            _ => Vec::new(),
+                        };
+                        if self.receive.apply(&event)
+                            && let Some(record) = record
+                            && let Some(worker) = &self.history_worker
+                        {
+                            worker.append(record, received_files);
+                        }
+                    }
+                    Event::HistoryUpdated(Err(error)) => {
+                        self.history_error = Some(format!(
+                            "{}{error}",
+                            self.language.strings().history_save_error
+                        ));
+                    }
+                    Event::HistoryUpdated(Ok(_)) => self.history_error = None,
+                    Event::HistoryCleared(Err(error)) => {
+                        self.history_error = Some(format!(
+                            "{}{error}",
+                            self.language.strings().history_clear_error
+                        ));
+                    }
+                    Event::HistoryCleared(Ok(_)) => self.history_error = None,
                     Event::ShutdownDone(Err(error)) => {
                         self.exit_state = Some(ExitState::Failed(error));
                         self.expand(true, window, cx);
@@ -190,6 +263,9 @@ impl Capsule {
                     }
                     _ => {}
                 }
+            }
+            if let Some(background_running) = shutdown_result {
+                self.flush_history_and_quit(background_running);
             }
             for action in actions {
                 match action {
@@ -226,6 +302,56 @@ impl Capsule {
                                 .then(|| self.device_name.clone()),
                         );
                     }
+                    changed = true;
+                    continue;
+                }
+                Event::HistoryLoaded(result) => {
+                    self.history_loaded = true;
+                    match result {
+                        Ok(records) => {
+                            self.history = records;
+                            self.history_error = None;
+                        }
+                        Err(error) => {
+                            self.history_error = Some(format!(
+                                "{}{error}",
+                                self.language.strings().history_load_error
+                            ));
+                        }
+                    }
+                    changed = true;
+                    continue;
+                }
+                Event::HistoryUpdated(result) => {
+                    match result {
+                        Ok(records) => {
+                            self.history = records;
+                            self.history_error = None;
+                        }
+                        Err(error) => {
+                            self.history_error = Some(format!(
+                                "{}{error}",
+                                self.language.strings().history_save_error
+                            ));
+                        }
+                    }
+                    changed = true;
+                    continue;
+                }
+                Event::HistoryCleared(result) => {
+                    match result {
+                        Ok(records) => {
+                            self.history = records;
+                            self.history_error = None;
+                        }
+                        Err(error) => {
+                            self.history_error = Some(format!(
+                                "{}{error}",
+                                self.language.strings().history_clear_error
+                            ));
+                        }
+                    }
+                    self.history_clear_until = None;
                     changed = true;
                     continue;
                 }
@@ -293,6 +419,7 @@ impl Capsule {
                         || self.model.phase.busy()
                         || self.picker_open
                         || self.name_input.is_some()
+                        || self.history_open
                         || !request.active()
                     {
                         let _ = request.decision.send(false);
@@ -306,7 +433,23 @@ impl Capsule {
                     continue;
                 }
                 Event::ReceiverActivity(event) => {
+                    let finished_at = Instant::now();
+                    let record = self.receive.history_record_for_event(
+                        &event,
+                        finished_at,
+                        crate::history::unix_time_ms(std::time::SystemTime::now()),
+                    );
+                    let received_files = match &event {
+                        omdrop_core::ReceiverEvent::Received { files, .. } => files.clone(),
+                        _ => Vec::new(),
+                    };
                     let applied = self.receive.apply(&event);
+                    if applied
+                        && let Some(record) = record
+                        && let Some(worker) = &self.history_worker
+                    {
+                        worker.append(record, received_files);
+                    }
                     if applied
                         && matches!(event, omdrop_core::ReceiverEvent::Received { .. })
                         && let (Some(shell), Some(message)) = (&self.shell, &self.receive.notice)
@@ -341,7 +484,22 @@ impl Capsule {
             if files_ready {
                 self.clear_previews(window);
             }
+            let send_record = if let Event::SendDone(id, result) = &event {
+                self.model.take_history_record(
+                    *id,
+                    result,
+                    Instant::now(),
+                    crate::history::unix_time_ms(std::time::SystemTime::now()),
+                )
+            } else {
+                None
+            };
             changed |= self.model.apply(event);
+            if let Some(record) = send_record
+                && let Some(worker) = &self.history_worker
+            {
+                worker.append(record, Vec::new());
+            }
             let reconnected = std::mem::take(&mut self.model.rescan_requested);
             if files_ready || reconnected {
                 self.scan(cx);
@@ -387,6 +545,15 @@ impl Capsule {
                         }
                         changed = true;
                     }
+                }
+                Action::HistoryFolderOpened(result) => {
+                    if let Err(error) = result {
+                        self.history_error = Some(format!(
+                            "{}{error}",
+                            self.language.strings().history_open_error
+                        ));
+                    }
+                    changed = true;
                 }
                 Action::DownloadDirectoryChosen(result) => {
                     match result {
@@ -446,7 +613,17 @@ impl Capsule {
             );
             changed = true;
         }
-        changed |= self.receive.expire_notice(Instant::now());
+        let now = Instant::now();
+        changed |= self.receive.expire_notice(now);
+        changed |= self.model.expire_speed(now);
+        changed |= self.receive.expire_speed(now);
+        if self
+            .history_clear_until
+            .is_some_and(|deadline| now >= deadline)
+        {
+            self.history_clear_until = None;
+            changed = true;
+        }
         if self
             .receiver_declined_until
             .is_some_and(|deadline| Instant::now() >= deadline)
@@ -479,7 +656,10 @@ impl Capsule {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if matches!(self.exit_state, Some(ExitState::Stopping)) {
+        if matches!(
+            self.exit_state,
+            Some(ExitState::Stopping | ExitState::FlushingHistory(_))
+        ) {
             return;
         }
         if !self.firmware.request_exit(firmware_confirmed) {
@@ -506,6 +686,7 @@ impl Capsule {
         }
         self.finish_name_edit(window);
         self.settings_open = false;
+        self.history_open = false;
         self.language_menu_open = false;
         self.expand(true, window, cx);
         let mut workers = std::mem::take(&mut self.workers);
@@ -519,6 +700,26 @@ impl Capsule {
             self.tx.clone(),
         );
         cx.notify();
+    }
+
+    fn flush_history_and_quit(&mut self, background_running: bool) {
+        let Some(history) = self.history_worker.take() else {
+            self.exit_state = Some(ExitState::FlushingHistory(background_running));
+            let _ = self.tx.send(Event::HistoryFlushed);
+            return;
+        };
+        self.exit_state = Some(ExitState::FlushingHistory(background_running));
+        let flush = history.flush_handle();
+        drop(history);
+        let history_thread = self.history_thread.take();
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let _ = flush.join();
+            if let Some(worker) = history_thread {
+                let _ = worker.join();
+            }
+            let _ = tx.send(Event::HistoryFlushed);
+        });
     }
     fn place(&self) {
         if let Some(shell) = &self.shell {
@@ -536,6 +737,8 @@ impl Capsule {
         }
         self.drop_hovered = false;
         self.settings_open = false;
+        self.history_open = false;
+        self.history_clear_until = None;
         self.language_menu_open = false;
         self.finish_name_edit(window);
         self.name_saved = false;
@@ -756,6 +959,7 @@ impl Capsule {
             return;
         }
         self.settings_open = true;
+        self.history_open = false;
         self.language_menu_open = false;
         self.firmware.open = false;
         self.name_saved = false;
@@ -766,6 +970,11 @@ impl Capsule {
         if self.firmware.open {
             self.firmware.open = false;
             self.firmware.confirm_exit = false;
+            cx.notify();
+        } else if self.history_open {
+            self.history_open = false;
+            self.history_clear_until = None;
+            self.focus.focus(window);
             cx.notify();
         } else if self.settings_open {
             self.settings_open = false;
@@ -852,6 +1061,48 @@ impl Capsule {
             cancel,
             self.tx.clone(),
         ));
+        cx.notify();
+    }
+
+    fn open_history(&mut self, cx: &mut Context<Self>) {
+        if self.settings_open && !self.firmware.busy && self.receive.active.is_none() {
+            self.history_open = true;
+            self.history_clear_until = None;
+            cx.notify();
+        }
+    }
+
+    fn clear_history(&mut self, cx: &mut Context<Self>) {
+        if self.history.is_empty() && self.history_error.is_none() {
+            return;
+        }
+        if self.history_clear_until.is_some() {
+            if let Some(worker) = &self.history_worker {
+                worker.clear();
+            }
+            self.history_clear_until = None;
+            self.history_error = None;
+        } else {
+            self.history_clear_until = Some(Instant::now() + Duration::from_secs(5));
+        }
+        cx.notify();
+    }
+
+    fn cancel_clear_history(&mut self, cx: &mut Context<Self>) {
+        self.history_clear_until = None;
+        cx.notify();
+    }
+
+    fn open_history_folder(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let Some(shell) = &self.shell else {
+            return;
+        };
+        if let Err(error) = shell.open_history_folder(path) {
+            self.history_error = Some(format!(
+                "{}{error:#}",
+                self.language.strings().history_open_error
+            ));
+        }
         cx.notify();
     }
     fn cancel(&mut self, cx: &mut Context<Self>) {
@@ -1141,7 +1392,9 @@ impl Capsule {
                                         .text_color(rgb(MUTED))
                                         .child(back_chevron())
                                         .child(div().text_size(px(11.)).line_height(px(14.)).child(
-                                            if self.settings_open || self.firmware.open {
+                                            if self.history_open {
+                                                text.back
+                                            } else if self.settings_open || self.firmware.open {
                                                 text.back_to_share
                                             } else {
                                                 text.back
@@ -1169,7 +1422,9 @@ impl Capsule {
                                             .text_size(px(13.))
                                             .line_height(px(18.))
                                             .font_weight(FontWeight::MEDIUM)
-                                            .child(if self.firmware.open {
+                                            .child(if self.history_open {
+                                                text.history_title
+                                            } else if self.firmware.open {
                                                 text.firmware_title
                                             } else {
                                                 text.settings_title
@@ -1183,7 +1438,11 @@ impl Capsule {
                     } else if self.firmware.open {
                         self.firmware_view(cx)
                     } else if self.settings_open {
-                        self.settings_view(cx)
+                        if self.history_open {
+                            self.history_view(cx)
+                        } else {
+                            self.settings_view(cx)
+                        }
                     } else if self.model.phase != Phase::Ready {
                         self.transfer_view(cx)
                     } else if self.receive.active.is_some() && self.model.files.is_empty() {
@@ -1201,6 +1460,7 @@ impl Capsule {
                             && (self.model.phase != Phase::Ready
                                 || !self.model.files.is_empty()
                                 || self.settings_open
+                                || self.history_open
                                 || self.firmware.open),
                         |panel| panel.child(self.receiving_view(true)),
                     )
@@ -1290,7 +1550,7 @@ impl Capsule {
                     )
                     .child(if self.name_input.is_some() {
                         text.footer_save
-                    } else if self.settings_open || self.firmware.open {
+                    } else if self.settings_open || self.history_open || self.firmware.open {
                         text.footer_back
                     } else if self.picker_open {
                         text.footer_choosing
@@ -1316,6 +1576,7 @@ impl Capsule {
         }
         self.finish_name_edit(window);
         self.settings_open = false;
+        self.history_open = false;
         self.language_menu_open = false;
         self.firmware.open = true;
         if !self.firmware.busy && !self.firmware.loading {
@@ -2087,6 +2348,23 @@ impl Capsule {
                     .flex_shrink_0()
                     .rounded(px(16.))
                     .bg(rgb(SURFACE))
+                    .p(px(16.))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(div().text_size(px(13.)).child(text.history_title))
+                    .child(
+                        button("open-transfer-history", text.history_open, false)
+                            .h(px(32.))
+                            .px(px(12.))
+                            .on_click(cx.listener(|this, _, _, cx| this.open_history(cx))),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .rounded(px(16.))
+                    .bg(rgb(SURFACE))
                     .border_1()
                     .border_color(rgba(0xffffff12))
                     .p(px(16.))
@@ -2287,10 +2565,193 @@ impl Capsule {
             .into_any_element()
     }
 
+    fn history_view(&self, cx: &mut Context<Self>) -> AnyElement {
+        use omdrop_host::{TransferDirection, TransferFailureReason, TransferOutcome};
+        let text = self.language.strings();
+        let mut list = div()
+            .id("history-list")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .gap(px(8.));
+        if self.history.is_empty() {
+            list = list.child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(12.))
+                    .text_color(rgb(MUTED))
+                    .child(if self.history_loaded {
+                        text.history_empty
+                    } else {
+                        text.history_loading
+                    }),
+            );
+        }
+        for (index, record) in self.history.iter().enumerate() {
+            let direction = match record.direction {
+                TransferDirection::Send => text.history_direction_send,
+                TransferDirection::Receive => text.history_direction_receive,
+            };
+            let (outcome, color) = match record.outcome {
+                TransferOutcome::Completed => (text.history_completed, 0x30d158),
+                TransferOutcome::Declined => (text.history_declined, MUTED),
+                TransferOutcome::Cancelled => (text.history_cancelled, MUTED),
+                TransferOutcome::Failed => (text.history_failed, 0xffb56b),
+            };
+            let file_size_text = record
+                .file_bytes
+                .map(file_size)
+                .unwrap_or_else(|| text.history_size_unknown.into());
+            let summary = self.language.history_summary(
+                record.file_count,
+                &file_size_text,
+                &file_size(record.transferred_bytes),
+                &self.language.history_duration(record.duration_ms),
+            );
+            let timestamp = crate::history::format_timestamp_utc(record.finished_at_unix_ms);
+            let failure = match record.failure_reason {
+                Some(TransferFailureReason::Connection) => Some(text.history_failure_connection),
+                Some(TransferFailureReason::Validation) => Some(text.history_failure_validation),
+                Some(TransferFailureReason::Other) => Some(text.history_failure_other),
+                None => None,
+            };
+            let destination = (record.outcome == TransferOutcome::Completed)
+                .then(|| record.destination.clone())
+                .flatten();
+            list = list.child(
+                div()
+                    .id(("history-entry", index))
+                    .flex_shrink_0()
+                    .rounded(px(12.))
+                    .bg(rgb(SURFACE))
+                    .p(px(12.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(5.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_size(px(12.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child(format!("{direction} {}", record.peer)),
+                            )
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .text_size(px(10.))
+                                    .text_color(rgb(color))
+                                    .child(outcome),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(rgb(MUTED))
+                            .child(timestamp),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(rgb(MUTED))
+                            .child(summary),
+                    )
+                    .when_some(failure, |entry, failure| {
+                        entry.child(
+                            div()
+                                .text_size(px(10.))
+                                .text_color(rgb(0xffb56b))
+                                .child(failure),
+                        )
+                    })
+                    .when_some(destination, |entry, destination| {
+                        entry.child(
+                            div()
+                                .id(("history-location", index))
+                                .h(px(28.))
+                                .px(px(10.))
+                                .rounded(px(7.))
+                                .bg(rgb(0x393940))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_size(px(10.))
+                                .cursor_pointer()
+                                .child(text.history_open_location)
+                                .hover(|style| style.bg(rgb(0x484850)))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.open_history_folder(destination.clone(), cx)
+                                })),
+                        )
+                    }),
+            );
+        }
+
+        let clear_controls = if self.history_clear_until.is_some() {
+            div()
+                .flex()
+                .gap(px(8.))
+                .child(
+                    button("confirm-clear-history", text.history_clear_confirm, true)
+                        .flex_1()
+                        .on_click(cx.listener(|this, _, _, cx| this.clear_history(cx))),
+                )
+                .child(
+                    button("cancel-clear-history", text.history_clear_cancel, false)
+                        .flex_1()
+                        .on_click(cx.listener(|this, _, _, cx| this.cancel_clear_history(cx))),
+                )
+                .into_any_element()
+        } else {
+            button("clear-history", text.history_clear, false)
+                .w_full()
+                .when(
+                    self.history.is_empty() && self.history_error.is_none(),
+                    |button| button.opacity(0.4).cursor(CursorStyle::Arrow),
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.clear_history(cx)))
+                .into_any_element()
+        };
+
+        div()
+            .id("history-page")
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(list)
+            .child(clear_controls)
+            .children(
+                self.history_error
+                    .as_ref()
+                    .map(|error| self.error_view(error)),
+            )
+            .into_any_element()
+    }
+
     fn answer_incoming(&mut self, accepted: bool, cx: &mut Context<Self>) {
         if let Some(request) = self.incoming.take() {
             let active = request.active();
             let accepted = accepted && active;
+            let declined_record = (!accepted && active).then(|| {
+                crate::receiving::declined_history_record(
+                    &request,
+                    crate::history::unix_time_ms(std::time::SystemTime::now()),
+                    Instant::now(),
+                )
+            });
             self.receiver_declined_until = None;
             request
                 .accepting
@@ -2309,6 +2770,12 @@ impl Capsule {
                     crate::receiving::NoticeKind::Info,
                 );
             }
+            if let Some(record) = declined_record
+                && delivered
+                && let Some(worker) = &self.history_worker
+            {
+                worker.append(record, Vec::new());
+            }
             cx.notify();
         }
     }
@@ -2317,6 +2784,10 @@ impl Capsule {
         use crate::receiving::Phase as ReceivePhase;
         let text = self.language.strings();
         let transfer = self.receive.active.as_ref().unwrap();
+        let speed = self
+            .receive
+            .speed_bytes_per_second
+            .map(|bytes| self.language.transfer_speed(&file_size(bytes)));
         let (title, detail, fraction) = match transfer.phase {
             ReceivePhase::Waiting => (
                 text.receive_waiting_title,
@@ -2426,6 +2897,9 @@ impl Capsule {
                     .text_color(rgb(MUTED))
                     .child(detail),
             )
+            .when_some(speed, |view, speed| {
+                view.child(div().text_size(px(11.)).text_color(rgb(MUTED)).child(speed))
+            })
             .when(!compact, |view| {
                 view.child(
                     div()
@@ -2984,6 +3458,14 @@ impl Capsule {
                             fraction * 100.
                         )),
                 );
+            if let Some(bytes) = self.model.speed_bytes_per_second {
+                view = view.child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(rgb(MUTED))
+                        .child(self.language.transfer_speed(&file_size(bytes))),
+                );
+            }
         }
         view = view.children(
             self.model

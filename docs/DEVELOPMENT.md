@@ -187,6 +187,13 @@ Adding a language requires a TOML file, a `Language` enum variant and an entry i
 keep every translation complete. Low-level diagnostics from shared modules (transfer, flashing and
 local settings validation) remain in their source wording. Full receive errors go to `desktop-receiver.log`.
 
+Active send and receive cards show a smoothed speed from progress events; it returns to zero
+after one second without progress. The latest 200 records live separately in
+`%LOCALAPPDATA%\omdrop\transfer-history.json`, written atomically under a process lock.
+Success is recorded only after final protocol confirmation. Records distinguish original file
+bytes from transfer-stream bytes and store no file contents or send paths; receive destinations
+are retained only for successful receives. Clearing history never deletes received files.
+
 Incoming transfers require confirmation. Completion requires archive validation and the final
 protocol response. Firmware maintenance pauses the idle receiver and rejects active transfers
 or other receivers; cancel/quit waits for the flashing child to exit before releasing the device.

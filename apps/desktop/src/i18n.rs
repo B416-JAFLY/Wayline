@@ -169,6 +169,46 @@ impl Language {
         format!("{}{size}", self.strings().received_prefix)
     }
 
+    pub fn history_summary(
+        self,
+        count: usize,
+        file_size: &str,
+        transferred_size: &str,
+        duration: &str,
+    ) -> String {
+        fill(
+            self.strings().history_summary,
+            &[
+                ("count", count.to_string()),
+                ("file_size", file_size.into()),
+                ("transferred_size", transferred_size.into()),
+                ("duration", duration.into()),
+            ],
+        )
+    }
+
+    pub fn transfer_speed(self, speed: &str) -> String {
+        fill(self.strings().transfer_speed, &[("speed", speed.into())])
+    }
+
+    pub fn history_duration(self, duration_ms: u64) -> String {
+        let total_seconds = duration_ms.saturating_add(999) / 1000;
+        if total_seconds < 60 {
+            fill(
+                self.strings().history_duration_seconds,
+                &[("count", total_seconds.max(1).to_string())],
+            )
+        } else {
+            fill(
+                self.strings().history_duration_minutes,
+                &[
+                    ("minutes", (total_seconds / 60).to_string()),
+                    ("seconds", (total_seconds % 60).to_string()),
+                ],
+            )
+        }
+    }
+
     pub fn incoming_ask(self, sender: &str, files: usize) -> String {
         fill(
             self.strings().incoming_ask,

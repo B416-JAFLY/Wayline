@@ -40,6 +40,7 @@ pub enum Action {
     FilesPicked(Result<Option<Vec<PathBuf>>, String>),
     DownloadDirectoryChosen(Result<Option<PathBuf>, String>),
     FilesOpened(u64, Result<(), String>),
+    HistoryFolderOpened(Result<(), String>),
     FileDrag(bool),
     ShellError(String),
     Quit,
@@ -458,6 +459,32 @@ impl Shell {
                 })()
                 .map_err(|error| format!("{error:#}"));
                 let _ = tx.send(Action::FilesOpened(selection_id, result));
+            })?;
+        Ok(())
+    }
+
+    pub fn open_history_folder(&self, path: PathBuf) -> Result<()> {
+        let owner = self.hwnd.0 as usize;
+        let tx = ACTIONS.get().unwrap().clone();
+        std::thread::Builder::new()
+            .name("omdrop-history-folder".into())
+            .spawn(move || {
+                let result = (|| -> Result<()> {
+                    let folder: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+                    let mut info = SHELLEXECUTEINFOW {
+                        cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
+                        fMask: SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI,
+                        hwnd: HWND(owner as *mut _),
+                        lpVerb: w!("open"),
+                        lpFile: PCWSTR(folder.as_ptr()),
+                        nShow: SW_SHOWNORMAL.0,
+                        ..Default::default()
+                    };
+                    unsafe { ShellExecuteExW(&mut info) }.context("无法打开接收文件夹")?;
+                    Ok(())
+                })()
+                .map_err(|error| format!("{error:#}"));
+                let _ = tx.send(Action::HistoryFolderOpened(result));
             })?;
         Ok(())
     }

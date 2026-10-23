@@ -9,6 +9,8 @@ mod file_drop;
 #[cfg(windows)]
 mod firmware;
 #[cfg(windows)]
+mod history;
+#[cfg(windows)]
 mod i18n;
 #[cfg(windows)]
 mod integration;
@@ -32,6 +34,8 @@ mod receiving;
 mod settings;
 #[cfg(windows)]
 mod share_layout;
+#[cfg(windows)]
+mod transfer_speed;
 #[cfg(windows)]
 mod ui;
 #[cfg(windows)]

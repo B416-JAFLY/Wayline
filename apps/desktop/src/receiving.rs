@@ -2,6 +2,9 @@
 use crate::backend::{self, Event};
 use anyhow::Result;
 use omdrop_core::{IncomingTransfer, ReceiverCore, ReceiverEvent, ReceiverOptions};
+use omdrop_host::{
+    TransferDirection, TransferFailureReason, TransferHistoryRecord, TransferOutcome,
+};
 use std::{
     io::Write,
     path::PathBuf,
@@ -17,6 +20,8 @@ use std::{
 pub struct IncomingRequest {
     pub transfer: IncomingTransfer,
     pub save_dir: PathBuf,
+    pub started_at: Instant,
+    pub started_at_unix_ms: u64,
     pub decision: Sender<bool>,
     pub accepting: Arc<AtomicBool>,
     pub expires: Instant,
@@ -45,6 +50,10 @@ pub struct Transfer {
     pub files: usize,
     pub save_dir: PathBuf,
     pub phase: Phase,
+    pub started_at: Instant,
+    pub started_at_unix_ms: u64,
+    pub file_bytes: Option<u64>,
+    pub transferred_bytes: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +93,8 @@ pub struct Model {
     pub notice: Option<Notice>,
     interrupted: Option<Transfer>,
     notice_generation: u64,
+    pub speed_bytes_per_second: Option<u64>,
+    speed: crate::transfer_speed::TransferSpeed,
 }
 
 impl Model {
@@ -219,6 +230,8 @@ impl Model {
     }
 
     pub fn begin(&mut self, transfer: &IncomingTransfer, save_dir: PathBuf) {
+        let started_at = Instant::now();
+        let file_bytes = offered_file_bytes(transfer);
         self.interrupted = None;
         self.active = Some(Transfer {
             id: transfer.id.clone(),
@@ -226,7 +239,12 @@ impl Model {
             files: transfer.files.len(),
             save_dir,
             phase: Phase::Waiting,
+            started_at,
+            started_at_unix_ms: crate::history::unix_time_ms(std::time::SystemTime::now()),
+            file_bytes,
+            transferred_bytes: 0,
         });
+        self.reset_speed();
         self.notice = None;
     }
 
@@ -234,6 +252,7 @@ impl Model {
         let Some(active) = self.active.take() else {
             return false;
         };
+        self.reset_speed();
         self.interrupted = Some(active);
         self.show_notice(message, NoticeKind::Error);
         true
@@ -252,16 +271,19 @@ impl Model {
     /// Only transfer-scoped events can finish the current receive. Discovery
     /// connections can fail independently while the upload is still healthy.
     pub fn apply(&mut self, event: &ReceiverEvent) -> bool {
-        // Radio polling and transfer callbacks use different queues. A final
-        // validated success can arrive after a disconnect status; keep that proof.
-        if self.active.is_none()
-            && let ReceiverEvent::Received { transfer, .. } = event
-            && self
-                .interrupted
-                .as_ref()
-                .is_some_and(|old| old.id == transfer.id)
-        {
-            self.active = self.interrupted.take();
+        // Radio polling and transfer callbacks use different queues. A terminal
+        // transfer event can arrive after a status interrupt moved it aside.
+        if self.active.is_none() {
+            let terminal_id = match event {
+                ReceiverEvent::Received { transfer, .. } => Some(transfer.id.as_str()),
+                ReceiverEvent::TransferFailed { transfer_id, .. } => Some(transfer_id.as_str()),
+                _ => None,
+            };
+            if terminal_id
+                .is_some_and(|id| self.interrupted.as_ref().is_some_and(|old| old.id == id))
+            {
+                self.active = self.interrupted.take();
+            }
         }
         let Some(active) = self.active.as_mut() else {
             return false;
@@ -272,12 +294,20 @@ impl Model {
                 received,
                 total,
             } if transfer_id == &active.id => {
+                self.speed.update(Instant::now(), *received);
+                self.speed_bytes_per_second = self
+                    .speed
+                    .available()
+                    .then(|| self.speed.bytes_per_second());
+                active.transferred_bytes = *received;
                 active.phase = Phase::Receiving {
                     received: *received,
                     total: *total,
                 };
             }
             ReceiverEvent::Confirming { transfer_id } if transfer_id == &active.id => {
+                self.speed = crate::transfer_speed::TransferSpeed::default();
+                self.speed_bytes_per_second = None;
                 active.phase = Phase::Confirming;
             }
             ReceiverEvent::Received { transfer, files } if transfer.id == active.id => {
@@ -287,6 +317,7 @@ impl Model {
                     &active.save_dir.display().to_string(),
                 );
                 self.active = None;
+                self.reset_speed();
                 self.show_notice(message, NoticeKind::Success);
             }
             ReceiverEvent::TransferFailed {
@@ -303,6 +334,7 @@ impl Model {
                     _ => text.receive_failed,
                 };
                 self.active = None;
+                self.reset_speed();
                 // Keep the banner short; full diagnostics remain available on demand.
                 self.show_notice_with_details(
                     message,
@@ -313,6 +345,117 @@ impl Model {
             _ => return false,
         }
         true
+    }
+
+    pub fn history_record_for_event(
+        &self,
+        event: &ReceiverEvent,
+        finished_at: Instant,
+        finished_at_unix_ms: u64,
+    ) -> Option<TransferHistoryRecord> {
+        let (transfer_id, outcome, failure_reason) = match event {
+            ReceiverEvent::Received { transfer, .. } => {
+                (&transfer.id, TransferOutcome::Completed, None)
+            }
+            ReceiverEvent::TransferFailed {
+                transfer_id, kind, ..
+            } => {
+                let (outcome, reason) = match kind {
+                    omdrop_core::TransferFailureKind::Declined => (TransferOutcome::Declined, None),
+                    omdrop_core::TransferFailureKind::Cancelled => {
+                        (TransferOutcome::Cancelled, None)
+                    }
+                    omdrop_core::TransferFailureKind::Connection => (
+                        TransferOutcome::Failed,
+                        Some(TransferFailureReason::Connection),
+                    ),
+                    omdrop_core::TransferFailureKind::Validation => (
+                        TransferOutcome::Failed,
+                        Some(TransferFailureReason::Validation),
+                    ),
+                    omdrop_core::TransferFailureKind::Other => {
+                        (TransferOutcome::Failed, Some(TransferFailureReason::Other))
+                    }
+                };
+                (transfer_id, outcome, reason)
+            }
+            _ => return None,
+        };
+        let transfer = self
+            .active
+            .as_ref()
+            .or(self.interrupted.as_ref())
+            .filter(|transfer| &transfer.id == transfer_id)?;
+        Some(TransferHistoryRecord {
+            started_at_unix_ms: transfer.started_at_unix_ms,
+            finished_at_unix_ms: finished_at_unix_ms.max(transfer.started_at_unix_ms),
+            direction: TransferDirection::Receive,
+            peer: transfer.sender.clone(),
+            file_count: transfer.files,
+            file_bytes: transfer.file_bytes,
+            transferred_bytes: transfer.transferred_bytes,
+            duration_ms: finished_at
+                .saturating_duration_since(transfer.started_at)
+                .as_millis()
+                .min(u64::MAX as u128) as u64,
+            outcome,
+            failure_reason,
+            destination: (outcome == TransferOutcome::Completed).then(|| transfer.save_dir.clone()),
+        })
+    }
+
+    pub fn expire_speed(&mut self, now: Instant) -> bool {
+        if !matches!(
+            self.active.as_ref().map(|active| &active.phase),
+            Some(Phase::Receiving { .. })
+        ) {
+            return false;
+        }
+        if self.speed.expire(now) {
+            self.speed_bytes_per_second = Some(0);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn reset_speed(&mut self) {
+        self.speed = crate::transfer_speed::TransferSpeed::default();
+        self.speed_bytes_per_second = None;
+    }
+}
+
+fn offered_file_bytes(transfer: &IncomingTransfer) -> Option<u64> {
+    if transfer.files.is_empty() {
+        return None;
+    }
+    transfer
+        .files
+        .iter()
+        .try_fold(0u64, |total, file| total.checked_add(file.size?))
+}
+
+pub fn declined_history_record(
+    request: &IncomingRequest,
+    finished_at_unix_ms: u64,
+    finished_at: Instant,
+) -> TransferHistoryRecord {
+    let file_bytes = offered_file_bytes(&request.transfer);
+    TransferHistoryRecord {
+        started_at_unix_ms: request.started_at_unix_ms,
+        finished_at_unix_ms: finished_at_unix_ms.max(request.started_at_unix_ms),
+        direction: TransferDirection::Receive,
+        peer: request.transfer.sender_name.clone(),
+        file_count: request.transfer.files.len(),
+        file_bytes,
+        transferred_bytes: 0,
+        duration_ms: finished_at
+            .saturating_duration_since(request.started_at)
+            .as_millis()
+            .min(u64::MAX as u128) as u64,
+        outcome: TransferOutcome::Declined,
+        failure_reason: None,
+        destination: None,
     }
 }
 
@@ -490,11 +633,15 @@ fn run(
         }
         let (decision, answer) = mpsc::channel();
         let accepting = Arc::new(AtomicBool::new(false));
-        let expires = Instant::now() + Duration::from_secs(45);
+        let started_at = Instant::now();
+        let started_at_unix_ms = crate::history::unix_time_ms(std::time::SystemTime::now());
+        let expires = started_at + Duration::from_secs(45);
         if prompt_events
             .send(Event::Incoming(IncomingRequest {
                 transfer: transfer.clone(),
                 save_dir: directory.clone(),
+                started_at,
+                started_at_unix_ms,
                 decision,
                 accepting: accepting.clone(),
                 expires,
@@ -726,6 +873,50 @@ mod tests {
             files: vec![]
         }));
         assert_eq!(model.active.as_ref().unwrap().id, "third");
+    }
+
+    #[test]
+    fn receive_history_uses_only_matching_terminal_events_and_transfer_counters() {
+        let offer = transfer("history-transfer");
+        let mut model = Model::default();
+        model.begin(&offer, PathBuf::from("chosen folder"));
+        model.apply(&ReceiverEvent::Receiving {
+            transfer_id: offer.id.clone(),
+            received: 4096,
+            total: Some(8192),
+        });
+        let now = Instant::now();
+        assert!(
+            model
+                .history_record_for_event(
+                    &ReceiverEvent::TransferFailed {
+                        transfer_id: "old-transfer".into(),
+                        error: "ignored".into(),
+                        kind: omdrop_core::TransferFailureKind::Connection,
+                    },
+                    now,
+                    100,
+                )
+                .is_none()
+        );
+        let failed = model
+            .history_record_for_event(
+                &ReceiverEvent::TransferFailed {
+                    transfer_id: offer.id.clone(),
+                    error: "private diagnostic detail".into(),
+                    kind: omdrop_core::TransferFailureKind::Connection,
+                },
+                now,
+                200,
+            )
+            .unwrap();
+        assert_eq!(failed.outcome, TransferOutcome::Failed);
+        assert_eq!(failed.transferred_bytes, 4096);
+        assert_eq!(
+            failed.failure_reason,
+            Some(TransferFailureReason::Connection)
+        );
+        assert!(failed.destination.is_none());
     }
 
     #[test]

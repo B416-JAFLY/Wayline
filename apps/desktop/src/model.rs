@@ -3,7 +3,10 @@ use crate::{
     i18n::{self, Language},
 };
 use omdrop_core::{DiscoveryEvent, NearbyReceiver, SendEvent};
-use std::path::PathBuf;
+use omdrop_host::{
+    TransferDirection, TransferFailureReason, TransferHistoryRecord, TransferOutcome,
+};
+use std::{path::PathBuf, time::Instant};
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Visibility {
@@ -81,9 +84,17 @@ pub struct Model {
     pub rescan_requested: bool,
     pub send_id: u64,
     pub phase: Phase,
+    pub speed_bytes_per_second: Option<u64>,
+    pub send_started_at: Option<Instant>,
+    pub send_started_at_unix_ms: u64,
+    pub send_file_count: usize,
+    pub send_file_bytes: u64,
+    pub send_transferred_bytes: u64,
+    pub send_confirmed: bool,
     pub error: Option<String>,
     pub status: Option<Result<LinkStatus, String>>,
     pub target: String,
+    speed: crate::transfer_speed::TransferSpeed,
 }
 impl Model {
     pub fn apply(&mut self, event: Event) -> bool {
@@ -162,38 +173,79 @@ impl Model {
                 if id == self.send_id && self.phase.busy() && self.phase != Phase::Cancelling =>
             {
                 self.phase = match event {
-                    SendEvent::Preparing => Phase::Preparing,
-                    SendEvent::WaitingForAcceptance { .. } => Phase::Waiting,
-                    SendEvent::Uploading { sent, total } => Phase::Uploading { sent, total },
-                    SendEvent::WaitingForConfirmation => Phase::Confirming,
-                    SendEvent::Completed(_) => Phase::Complete,
+                    SendEvent::Preparing => {
+                        self.reset_speed();
+                        Phase::Preparing
+                    }
+                    SendEvent::WaitingForAcceptance { .. } => {
+                        self.reset_speed();
+                        Phase::Waiting
+                    }
+                    SendEvent::Uploading { sent, total } => {
+                        self.send_transferred_bytes = sent;
+                        self.speed.update(Instant::now(), sent);
+                        self.speed_bytes_per_second = self
+                            .speed
+                            .available()
+                            .then(|| self.speed.bytes_per_second());
+                        Phase::Uploading { sent, total }
+                    }
+                    SendEvent::WaitingForConfirmation => {
+                        self.reset_speed();
+                        Phase::Confirming
+                    }
+                    SendEvent::Completed(report) => {
+                        self.send_file_bytes = report.source_bytes;
+                        self.send_transferred_bytes = report.archive_bytes;
+                        self.send_confirmed = true;
+                        self.reset_speed();
+                        Phase::Complete
+                    }
                 };
             }
+            Event::Transfer(id, SendEvent::Completed(report))
+                if id == self.send_id && self.phase == Phase::Cancelling =>
+            {
+                // Preserve final file and wire byte counts while the matching
+                // SendDone event resolves the cancellation race.
+                self.send_file_bytes = report.source_bytes;
+                self.send_transferred_bytes = report.archive_bytes;
+                self.send_confirmed = true;
+            }
             Event::SendDone(id, result) if id == self.send_id => {
+                self.reset_speed();
                 if self.phase == Phase::Cancelling {
                     // A final 200 can race a user's cancel click. Preserve delivery evidence.
                     self.phase = if result.is_ok() {
+                        self.send_confirmed = true;
                         Phase::Complete
                     } else {
                         Phase::Cancelled
                     };
                     self.error = None;
-                } else if let Err(failure) = result {
-                    match failure {
-                        SendFailure::Declined => {
-                            self.phase = Phase::Declined;
+                } else {
+                    match result {
+                        Ok(()) => {
+                            self.send_confirmed = true;
+                            self.phase = Phase::Complete;
                             self.error = None;
                         }
-                        SendFailure::Cancelled => {
-                            self.phase = Phase::Cancelled;
-                            self.error = None;
-                        }
-                        SendFailure::Connection(error)
-                        | SendFailure::Validation(error)
-                        | SendFailure::Failed(error) => {
-                            self.phase = Phase::Failed;
-                            self.error = Some(error);
-                        }
+                        Err(failure) => match failure {
+                            SendFailure::Declined => {
+                                self.phase = Phase::Declined;
+                                self.error = None;
+                            }
+                            SendFailure::Cancelled => {
+                                self.phase = Phase::Cancelled;
+                                self.error = None;
+                            }
+                            SendFailure::Connection(error)
+                            | SendFailure::Validation(error)
+                            | SendFailure::Failed(error) => {
+                                self.phase = Phase::Failed;
+                                self.error = Some(error);
+                            }
+                        },
                     }
                 }
             }
@@ -261,7 +313,95 @@ impl Model {
         self.target = peer.name.clone();
         self.phase = Phase::Preparing;
         self.error = None;
+        self.send_started_at = Some(Instant::now());
+        self.send_started_at_unix_ms = crate::history::unix_time_ms(std::time::SystemTime::now());
+        self.send_file_count = self.files.len();
+        self.send_file_bytes = self.bytes;
+        self.send_transferred_bytes = 0;
+        self.send_confirmed = false;
+        self.reset_speed();
         Some(peer)
+    }
+
+    pub fn expire_speed(&mut self, now: Instant) -> bool {
+        if !matches!(self.phase, Phase::Uploading { .. }) {
+            return false;
+        }
+        if self.speed.expire(now) {
+            self.speed_bytes_per_second = Some(0);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn take_history_record(
+        &mut self,
+        id: u64,
+        result: &Result<(), SendFailure>,
+        finished_at: Instant,
+        finished_at_unix_ms: u64,
+    ) -> Option<TransferHistoryRecord> {
+        if id != self.send_id {
+            return None;
+        }
+        let started_at = self.send_started_at.take()?;
+        let (outcome, failure_reason, transferred_bytes) = if self.send_confirmed || result.is_ok()
+        {
+            (
+                TransferOutcome::Completed,
+                None,
+                self.send_transferred_bytes,
+            )
+        } else {
+            match result {
+                Err(SendFailure::Declined) => {
+                    (TransferOutcome::Declined, None, self.send_transferred_bytes)
+                }
+                Err(SendFailure::Cancelled) => (
+                    TransferOutcome::Cancelled,
+                    None,
+                    self.send_transferred_bytes,
+                ),
+                Err(SendFailure::Connection(_)) => (
+                    TransferOutcome::Failed,
+                    Some(TransferFailureReason::Connection),
+                    self.send_transferred_bytes,
+                ),
+                Err(SendFailure::Validation(_)) => (
+                    TransferOutcome::Failed,
+                    Some(TransferFailureReason::Validation),
+                    self.send_transferred_bytes,
+                ),
+                Err(SendFailure::Failed(_)) => (
+                    TransferOutcome::Failed,
+                    Some(TransferFailureReason::Other),
+                    self.send_transferred_bytes,
+                ),
+                Ok(()) => unreachable!("successful send is handled above"),
+            }
+        };
+        Some(TransferHistoryRecord {
+            started_at_unix_ms: self.send_started_at_unix_ms,
+            finished_at_unix_ms: finished_at_unix_ms.max(self.send_started_at_unix_ms),
+            direction: TransferDirection::Send,
+            peer: self.target.clone(),
+            file_count: self.send_file_count,
+            file_bytes: Some(self.send_file_bytes),
+            transferred_bytes,
+            duration_ms: finished_at
+                .saturating_duration_since(started_at)
+                .as_millis()
+                .min(u64::MAX as u128) as u64,
+            outcome,
+            failure_reason,
+            destination: None,
+        })
+    }
+
+    fn reset_speed(&mut self) {
+        self.speed = crate::transfer_speed::TransferSpeed::default();
+        self.speed_bytes_per_second = None;
     }
 }
 
@@ -433,6 +573,35 @@ mod tests {
         assert_eq!(model.phase, Phase::Failed);
         assert!(!model.apply(Event::ScanDone(7, Ok(()))));
         assert_eq!(model.error.as_deref(), Some("transfer error"));
+    }
+
+    #[test]
+    fn history_ignores_stale_send_done_and_delivery_evidence_wins_cancel() {
+        let started = Instant::now() - std::time::Duration::from_secs(2);
+        let mut model = Model {
+            send_id: 5,
+            send_started_at: Some(started),
+            send_started_at_unix_ms: 100,
+            send_file_count: 2,
+            send_file_bytes: 4096,
+            send_transferred_bytes: 2048,
+            target: "iPhone".into(),
+            ..Default::default()
+        };
+        let finished = Instant::now();
+        assert!(
+            model
+                .take_history_record(4, &Err(SendFailure::Cancelled), finished, 200,)
+                .is_none()
+        );
+        model.send_confirmed = true;
+        let record = model
+            .take_history_record(5, &Err(SendFailure::Cancelled), finished, 200)
+            .unwrap();
+        assert_eq!(record.outcome, TransferOutcome::Completed);
+        assert_eq!(record.transferred_bytes, 2048);
+        assert_eq!(record.file_bytes, Some(4096));
+        assert!(record.duration_ms >= 1000);
     }
     #[test]
     fn live_discovery_keeps_row_order_and_selection_until_selected_device_is_removed() {
