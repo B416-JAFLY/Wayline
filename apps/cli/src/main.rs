@@ -57,11 +57,15 @@ fn main() {
     let output = Output {
         json: args::json_requested(&values),
     };
-    let command = values
-        .iter()
-        .find(|arg| arg.as_str() != "--json")
-        .cloned()
-        .unwrap_or_else(|| "help".into());
+    let mut command_args = values.iter().filter(|arg| arg.as_str() != "--json");
+    let command = match command_args.next().map(String::as_str) {
+        Some(command @ ("radio" | "firmware")) => command_args
+            .next()
+            .map(|subcommand| format!("{command} {subcommand}"))
+            .unwrap_or_else(|| command.to_owned()),
+        Some(command) => command.to_owned(),
+        None => "help".into(),
+    };
     let parsed = Args::parse(values, std::io::stdin().is_terminal());
     let signals = Signals::default();
     let stop = signals.clone();
@@ -87,6 +91,31 @@ fn run(args: Args, output: Output, signals: &Signals) -> Result<(), Failure> {
                 serde_json::to_value(status).map_err(Failure::operation)?,
             );
             Ok(())
+        }
+        "radio status" => {
+            let status = Client::default().status()?;
+            output.event(
+                "radioStatus",
+                json!({"band":band_for_channel(status.channel),"status":status}),
+            );
+            Ok(())
+        }
+        "radio set" => {
+            let channel = args.channel.expect("validated channel");
+            let band = args.band.as_deref().expect("validated band");
+            let lease = acquire(SessionKind::Client, signals)?;
+            with_lease(lease, output, signals, || {
+                if channel != 6 {
+                    wait_radio_ready(signals, Duration::from_secs(30))?;
+                }
+                let status =
+                    Client::default().set_channel_and_wait(channel, Duration::from_secs(45))?;
+                output.event(
+                    "radioConfigured",
+                    json!({"band":band,"channel":channel,"status":status}),
+                );
+                Ok(())
+            })
         }
         "doctor" => doctor(output),
         "firmware info" => firmware_info(&args, output),
@@ -124,6 +153,40 @@ fn run(args: Args, output: Output, signals: &Signals) -> Result<(), Failure> {
             })
         }
         _ => Err(Failure::policy("未知命令")),
+    }
+}
+
+fn band_for_channel(channel: u16) -> &'static str {
+    if channel == 6 {
+        "2.4ghz"
+    } else {
+        "5ghz"
+    }
+}
+
+fn wait_radio_ready(signals: &Signals, timeout: Duration) -> Result<(), Failure> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        signals.check()?;
+        let status = Client::default().status()?;
+        if status.target.as_deref() == Some("esp32c5")
+            && status.state == "running"
+            && status.awdl0
+            && status.error.is_none()
+        {
+            return Ok(());
+        }
+        if status.target.as_deref() == Some("esp32s3") {
+            return Err(Failure::policy("5ghz 需要 ESP32-C5；当前识别到 ESP32-S3"));
+        }
+        if Instant::now() >= deadline {
+            return Err(Failure::unavailable(
+                status
+                    .error
+                    .unwrap_or_else(|| "等待无线设备识别与就绪超时".into()),
+            ));
+        }
+        thread::sleep(Duration::from_millis(250));
     }
 }
 
@@ -299,8 +362,11 @@ fn send(
         target_name: selected.name.clone(),
         timeout: args.timeout,
         format: args.format,
-        ble_wake: args.ble,
-        legacy_ble: args.legacy_ble,
+        // Discovery already ran the BLE wake advertisement. Starting a second
+        // WinRT publisher in the same CLI process can race its shutdown on
+        // Windows; the selected receiver is now reachable over AWDL.
+        ble_wake: false,
+        legacy_ble: false,
     };
     let mut last_progress = None;
     send_to_receiver_cancellable(
@@ -447,11 +513,22 @@ fn doctor(output: Output) -> Result<(), Failure> {
 }
 
 fn firmware_info(args: &Args, output: Output) -> Result<(), Failure> {
+    let board = args
+        .board
+        .as_deref()
+        .unwrap_or(omdrop_flash::SUPPORTED_BOARD);
     let manifest = match &args.manifest {
         Some(path) => path.clone(),
-        None => omdrop_flash::installed_manifest().map_err(Failure::unavailable)?,
+        None => omdrop_flash::installed_manifest_for_board(board).map_err(Failure::unavailable)?,
     };
     let package = omdrop_flash::validate_package(&manifest).map_err(Failure::operation)?;
+    if args
+        .board
+        .as_deref()
+        .is_some_and(|board| package.manifest.board != board)
+    {
+        return Err(Failure::policy("固件清单与 --board profile 不匹配"));
+    }
     output.event(
         "firmwarePackage",
         serde_json::to_value(&package.manifest).map_err(Failure::operation)?,
@@ -463,10 +540,13 @@ fn firmware_info(args: &Args, output: Output) -> Result<(), Failure> {
 
 fn firmware_flash(args: &Args, output: Output, signals: &Signals) -> Result<(), Failure> {
     signals.check()?;
+    let board = args.board.as_deref().expect("validated board");
     let options = omdrop_flash::FlashOptions {
         manifest_path: match &args.manifest {
             Some(path) => path.clone(),
-            None => omdrop_flash::installed_manifest().map_err(Failure::unavailable)?,
+            None => {
+                omdrop_flash::installed_manifest_for_board(board).map_err(Failure::unavailable)?
+            }
         },
         tool_path: match &args.tool {
             Some(path) => path.clone(),

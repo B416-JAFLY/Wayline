@@ -6,7 +6,7 @@ use crate::{
     wire::{self, ReceiveClock},
 };
 use omdrop_proto::{encode_frame, Decoder, HostMessage, RadioMessage, COBS_MAX, PROTO_VERSION};
-use omdrop_radio::Hello;
+pub use omdrop_radio::Hello;
 use owly_awdl::Frame;
 use std::{
     io::{self, Read, Write},
@@ -217,6 +217,14 @@ pub struct Radio {
 
 impl Radio {
     pub async fn open(port: &str, channel: u8) -> io::Result<(Self, Hello)> {
+        Self::open_with_target(port, channel, |_| Ok(())).await
+    }
+
+    pub async fn open_with_target(
+        port: &str,
+        channel: u8,
+        publish_target: impl FnOnce(&Hello) -> io::Result<()>,
+    ) -> io::Result<(Self, Hello)> {
         // All settings are applied before cloning the port; clones share OS state.
         let mut port = serialport::new(port, 3_000_000)
             .timeout(POLL)
@@ -229,11 +237,15 @@ impl Radio {
             .map_err(io::Error::other)?;
         let reader = SerialReader(port.try_clone().map_err(io::Error::other)?);
         let radio = Self::start(reader, port, channel)?;
-        let hello = radio.initialize(channel).await?;
+        let hello = radio.initialize(channel, publish_target).await?;
         Ok((radio, hello))
     }
 
-    async fn initialize(&self, channel: u8) -> io::Result<Hello> {
+    async fn initialize(
+        &self,
+        channel: u8,
+        publish_target: impl FnOnce(&Hello) -> io::Result<()>,
+    ) -> io::Result<Hello> {
         let mut hello = None;
         for _ in 0..10 {
             match self
@@ -256,6 +268,7 @@ impl Radio {
         }
         let hello = hello
             .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "ESP32 did not answer HELLO"))?;
+        publish_target(&hello)?;
         crate::configuration(hello.mac, "Omdrop", &hello.target, channel)?;
         self.control
             .command(
@@ -797,7 +810,7 @@ pub(crate) mod tests {
                 }
                 input
             });
-            assert_eq!(radio.initialize(6).await.is_ok(), valid);
+            assert_eq!(radio.initialize(6, |_| Ok(())).await.is_ok(), valid);
             let _input = device.await.unwrap();
             drop(radio);
         }

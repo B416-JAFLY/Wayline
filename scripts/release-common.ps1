@@ -116,12 +116,34 @@ function Get-AirDropReleaseMetadata([string]$Root) {
     return [ordered]@{ upstreamRevision = '2e9b2b0228432d5e402a9c90a031b419960d0bd1'; sources = $entries }
 }
 
+function Get-FirmwareProfile([string]$Board) {
+    switch ($Board) {
+        'cardputer-adv' {
+            return [ordered]@{ board='cardputer-adv'; chip='esp32s3'; flashSize=8388608L; bootloaderOffset=0L; tableOffset=32768L; appOffset=65536L; imageChipId=9 }
+        }
+        'esp32s3-uart0' {
+            return [ordered]@{ board='esp32s3-uart0'; chip='esp32s3'; flashSize=8388608L; bootloaderOffset=0L; tableOffset=32768L; appOffset=65536L; imageChipId=9 }
+        }
+        'esp32s3-native-usb' {
+            return [ordered]@{ board='esp32s3-native-usb'; chip='esp32s3'; flashSize=8388608L; bootloaderOffset=0L; tableOffset=32768L; appOffset=65536L; imageChipId=9 }
+        }
+        'esp32c5-uart0' {
+            return [ordered]@{ board='esp32c5-uart0'; chip='esp32c5'; flashSize=2097152L; bootloaderOffset=8192L; tableOffset=32768L; appOffset=65536L; imageChipId=0x17 }
+        }
+        'esp32c5-native-usb' {
+            return [ordered]@{ board='esp32c5-native-usb'; chip='esp32c5'; flashSize=2097152L; bootloaderOffset=8192L; tableOffset=32768L; appOffset=65536L; imageChipId=0x17 }
+        }
+        default { throw "Unsupported firmware profile: $Board" }
+    }
+}
+
 function Test-FirmwarePackage([string]$Root) {
     $manifestPath = Resolve-PackageFile $Root 'manifest.json'
     if ((Get-Item -LiteralPath $manifestPath).Length -gt 65536) { throw 'Firmware manifest is too large.' }
     $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($manifest.formatVersion -ne 1 -or $manifest.board -ne 'cardputer-adv' -or $manifest.chip -ne 'esp32s3' -or
-        $manifest.flashSize -ne 8388608 -or $manifest.protocolVersion -ne 2 -or $manifest.idfVersion -ne '6.0' -or
+    $profile = Get-FirmwareProfile $manifest.board
+    if ($manifest.formatVersion -ne 1 -or $manifest.chip -ne $profile.chip -or
+        $manifest.flashSize -ne $profile.flashSize -or $manifest.protocolVersion -ne 2 -or $manifest.idfVersion -ne '6.0' -or
         $manifest.toolVersion -ne '5.0.2' -or $manifest.sourceRevision -notmatch '^[0-9a-f]{40}$' -or
         [string]::IsNullOrWhiteSpace($manifest.firmwareVersion) -or $manifest.firmwareVersion.Length -gt 128 -or
         $manifest.firmwareVersion -match '[\x00-\x1f]' -or @($manifest.images).Count -ne 3) { throw 'Unsupported firmware package.' }
@@ -129,11 +151,16 @@ function Test-FirmwarePackage([string]$Root) {
     $paths = @{}
     $previousEnd = 0L
     foreach ($entry in $manifest.images | Sort-Object offset) {
-        $expectedOffset = switch ($entry.kind) { 'bootloader' { 0L } 'partition-table' { 32768L } 'application' { 65536L } default { throw 'Unknown firmware image kind.' } }
+        $expectedOffset = switch ($entry.kind) {
+            'bootloader' { $profile.bootloaderOffset }
+            'partition-table' { $profile.tableOffset }
+            'application' { $profile.appOffset }
+            default { throw 'Unknown firmware image kind.' }
+        }
         $length = [long]$entry.length
         $offset = [long]$entry.offset
         if ($offset -ne $expectedOffset -or $kinds.ContainsKey($entry.kind) -or $paths.ContainsKey($entry.path) -or
-            $length -le 0 -or $length -gt 8388608 -or $offset -lt $previousEnd -or $offset + $length -gt 8388608) { throw 'Invalid firmware image ranges.' }
+            $length -le 0 -or $length -gt $profile.flashSize -or $offset -lt $previousEnd -or $offset + $length -gt $profile.flashSize) { throw 'Invalid firmware image ranges.' }
         $path = Resolve-PackageFile $Root $entry.path
         if ((Get-Item -LiteralPath $path).Length -ne $length -or $entry.sha256 -notmatch '^[0-9a-fA-F]{64}$' -or
             (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ine $entry.sha256) { throw "Firmware checksum mismatch: $($entry.path)" }
@@ -141,7 +168,7 @@ function Test-FirmwarePackage([string]$Root) {
             $stream = [IO.File]::OpenRead($path)
             try {
                 $header = New-Object byte[] 24
-                if ($stream.Read($header, 0, 24) -ne 24 -or $header[0] -ne 0xe9 -or [BitConverter]::ToUInt16($header, 12) -ne 9) { throw 'Expected an ESP32-S3 firmware image.' }
+                if ($stream.Read($header, 0, 24) -ne 24 -or $header[0] -ne 0xe9 -or [BitConverter]::ToUInt16($header, 12) -ne $profile.imageChipId) { throw 'Firmware image header does not match its profile.' }
             } finally { $stream.Dispose() }
         }
         $kinds[$entry.kind] = $entry
@@ -158,9 +185,9 @@ function Test-FirmwarePackage([string]$Root) {
         if ([BitConverter]::ToUInt16($bytes, $index) -ne 0x50aa) { break }
         $offset = [long][BitConverter]::ToUInt32($bytes, $index + 4)
         $length = [long][BitConverter]::ToUInt32($bytes, $index + 8)
-        if ($offset -lt 36864 -or $length -le 0 -or $offset + $length -gt 8388608 -or $offset % 4096 -or $length % 4096) { throw 'Invalid firmware partition range.' }
+        if ($offset -lt 36864 -or $length -le 0 -or $offset + $length -gt $profile.flashSize -or $offset % 4096 -or $length % 4096) { throw 'Invalid firmware partition range.' }
         $partitions += @{ offset = $offset; end = $offset + $length }
-        if ($bytes[$index + 2] -eq 0 -and $offset -eq 65536 -and $kinds['application'].length -le $length) { $appFound = $true }
+        if ($bytes[$index + 2] -eq 0 -and $offset -eq $profile.appOffset -and $kinds['application'].length -le $length) { $appFound = $true }
         if ($bytes[$index + 2] -eq 1 -and $bytes[$index + 3] -eq 2) { $nvsFound = $true }
         if ($bytes[$index + 2] -ne 0) {
             foreach ($entry in $manifest.images) {
@@ -234,6 +261,27 @@ function Test-ReleasePackage([string]$Root) {
         $firmware = Test-FirmwarePackage (Join-Path $Root 'firmware')
         if ($firmware.sourceRevision -ne $manifest.sourceRevision -or $firmware.firmwareVersion -ne $manifest.firmwareVersion -or
             $firmware.toolVersion -ne $manifest.toolVersion) { throw 'Firmware and release metadata do not match.' }
+        $profilesRoot = Join-Path $Root 'firmware/profiles'
+        $profileBoards = @($firmware.board)
+        if (Test-Path -LiteralPath $profilesRoot -PathType Container) {
+            foreach ($profileManifestPath in Get-ChildItem -LiteralPath $profilesRoot -Filter 'manifest.json' -File -Recurse) {
+                $profileRoot = Split-Path -Parent $profileManifestPath.FullName
+                $profile = Test-FirmwarePackage $profileRoot
+                if ($profile.board -ne (Split-Path -Leaf $profileRoot) -or
+                    $profile.sourceRevision -ne $firmware.sourceRevision -or
+                    $profile.toolVersion -ne $firmware.toolVersion) {
+                    throw 'Additional firmware profile does not match the S3 release build.'
+                }
+                $profileBoards += $profile.board
+            }
+        }
+        if ($manifest.PSObject.Properties['firmwareProfiles']) {
+            $declared = @($manifest.firmwareProfiles | Sort-Object)
+            $found = @($profileBoards | Sort-Object)
+            if (($declared -join ',') -cne ($found -join ',')) { throw 'Release firmware profile list does not match its packages.' }
+        } elseif ($profileBoards.Count) {
+            throw 'Release firmware profiles are missing from release metadata.'
+        }
     }
     foreach ($file in Get-PackageFiles $Root) {
         $relative = $file.FullName.Substring([IO.Path]::GetFullPath($Root).TrimEnd('\', '/').Length + 1).Replace('\', '/')

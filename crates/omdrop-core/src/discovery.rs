@@ -41,7 +41,7 @@ impl Probe {
     }
 
     fn due(&self, now: Duration) -> bool {
-        !self.finished && self.attempts < 3 && now >= self.next_attempt
+        !self.finished && now >= self.next_attempt
     }
 
     fn finish(
@@ -49,7 +49,7 @@ impl Probe {
         now: Duration,
         result: Result<Option<String>, SendError>,
     ) -> Option<DiscoveryEvent> {
-        self.attempts += 1;
+        self.attempts = self.attempts.saturating_add(1);
         match result {
             Ok(Some(name)) => {
                 self.name = Some(name.clone());
@@ -64,7 +64,11 @@ impl Probe {
                 None
             }
             Err(error) => {
-                self.next_attempt = now + Duration::from_secs(u64::from(self.attempts));
+                // Keep probing while the caller's discovery deadline is active. A receiver
+                // can advertise before its TCP listener is ready or briefly refuse a
+                // connection; stopping after three failures wastes the remaining timeout.
+                // Cap the backoff so late recovery is still detected promptly.
+                self.next_attempt = now + Duration::from_secs(u64::from(self.attempts.min(3)));
                 Some(DiscoveryEvent::ProbeFailed {
                     instance: self.service.instance.clone(),
                     attempt: self.attempts,
@@ -95,8 +99,8 @@ impl Probe {
     }
 }
 
-/// No file offers are sent here. Each service is probed at most three times,
-/// and late TXT capability records update an already named device.
+/// No file offers are sent here. Failed probes retry with bounded backoff until the
+/// caller's timeout, and late TXT capability records update an already named device.
 pub fn discover_receivers_live(
     interface: NetworkInterface,
     identity: &Identity,
@@ -307,15 +311,22 @@ mod tests {
         assert!(probe.name.is_none() && probe.due(Duration::ZERO));
     }
     #[test]
-    fn probe_retries_are_bounded_and_duplicate_names_are_not_selected() {
+    fn probe_retries_continue_until_timeout_and_duplicate_names_are_not_selected() {
         let mut probe = Probe::new(service());
-        for second in 0..3 {
+        for second in [0, 1, 3, 6, 9, 12] {
+            assert!(probe.due(Duration::from_secs(second)));
             probe.finish(
                 Duration::from_secs(second),
                 Err(SendError::invalid("timeout")),
             );
         }
-        assert!(!probe.due(Duration::from_secs(100)));
+        assert!(!probe.due(Duration::from_secs(14)));
+        assert!(probe.due(Duration::from_secs(15)));
+        assert!(matches!(
+            probe.finish(Duration::from_secs(15), Ok(Some("iPhone".into()))),
+            Some(DiscoveryEvent::Found(receiver)) if receiver.name == "iPhone"
+        ));
+        assert!(!probe.due(Duration::from_secs(30)));
         let first = NearbyReceiver {
             name: "iPhone".into(),
             service: service(),
@@ -324,5 +335,20 @@ mod tests {
         let mut second = first.clone();
         second.service.instance = "other._airdrop._tcp.local".into();
         assert!(receiver_by_name(&[first, second], "iPhone").is_err());
+    }
+
+    #[test]
+    fn long_discovery_timeouts_do_not_overflow_probe_attempts() {
+        let mut probe = Probe::new(service());
+        probe.attempts = u8::MAX;
+        let now = Duration::from_secs(1_000);
+        assert!(matches!(
+            probe.finish(now, Err(SendError::invalid("connection refused"))),
+            Some(DiscoveryEvent::ProbeFailed {
+                attempt: u8::MAX,
+                ..
+            })
+        ));
+        assert_eq!(probe.next_attempt, now + Duration::from_secs(3));
     }
 }

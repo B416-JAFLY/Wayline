@@ -6,8 +6,9 @@ use omdrop_awdl::{
 };
 use std::{
     ffi::OsString,
-    io,
+    fs, io,
     os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
+    path::Path,
     time::Duration,
 };
 use tokio::sync::watch;
@@ -140,8 +141,15 @@ pub fn main() -> io::Result<()> {
     tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(async move {
         let stopping = wait_for_stop(&stop);
         tokio::pin!(stopping);
+        let target_file = std::env::var_os("OMDROP_BRIDGE_TARGET_FILE").map(std::path::PathBuf::from);
+        let publish_target = move |hello: &omdrop_awdl::serial::Hello| {
+            if let Some(path) = target_file.as_deref() {
+                publish_radio_target(path, &hello.target)?;
+            }
+            Ok(())
+        };
         let (radio,hello)=tokio::select! {
-            result=Radio::open(&options.port,options.channel)=>result?,
+            result=Radio::open_with_target(&options.port,options.channel,publish_target)=>result?,
             result=&mut stopping=>return result,
         };
         let config=omdrop_awdl::configuration(hello.mac,"Omdrop",&hello.target,options.channel)?;
@@ -171,6 +179,19 @@ pub fn main() -> io::Result<()> {
         tracing::info!("Rust AWDL stopped; radio and awdl0 released");
         result
     })
+}
+
+fn publish_radio_target(path: &Path, target: &str) -> io::Result<()> {
+    if !matches!(target, "esp32s3" | "esp32c5") {
+        return Err(invalid("unsupported radio target"));
+    }
+    let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
+    fs::write(&temporary, target.as_bytes())?;
+    if let Err(error) = fs::rename(&temporary, path) {
+        let _ = fs::remove_file(temporary);
+        return Err(error);
+    }
+    Ok(())
 }
 
 async fn wait_for_stop(event: &Option<StopEvent>) -> io::Result<()> {

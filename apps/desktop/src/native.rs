@@ -26,7 +26,7 @@ use windows::{
             WindowsAndMessaging::*,
         },
     },
-    core::{PCWSTR, w},
+    core::{HSTRING, PCWSTR, w},
 };
 
 pub enum Action {
@@ -149,12 +149,15 @@ enum TrayUpdate {
 struct TrayState {
     connected: bool,
     applied: Option<bool>,
+    dirty: bool,
 }
 impl TrayState {
     fn pending(&self) -> Option<TrayUpdate> {
         match self.applied {
             None => Some(TrayUpdate::Add),
-            Some(connected) if connected != self.connected => Some(TrayUpdate::Modify),
+            Some(connected) if self.dirty || connected != self.connected => {
+                Some(TrayUpdate::Modify)
+            }
             Some(_) => None,
         }
     }
@@ -162,6 +165,7 @@ impl TrayState {
     fn applied(&mut self, success: bool) {
         if success {
             self.applied = Some(self.connected);
+            self.dirty = false;
         }
     }
 }
@@ -271,20 +275,20 @@ impl Shell {
             // Shell_NotifyIcon only documents a BOOL result, not GetLastError.
             // An explicitly visible taskbar window remains usable without a tray.
             if !taskbar_mode {
-                bail!(
-                    "添加托盘图标失败，请使用普通权限的 Windows 桌面会话，或以 --show-in-taskbar 打开"
-                );
+                bail!(crate::i18n::current().strings().err_tray_add);
             }
             shell.tray_error_reported = true;
             let _ = tx.send(Action::ShellError(
-                "Windows 未能显示托盘图标。可在设置中退出 Omdrop；隐藏后可重新启动程序打开窗口。"
-                    .into(),
+                crate::i18n::current().strings().err_tray_hidden.into(),
             ));
         }
         monitor_file_drag(tx.clone(), stop_drag_monitor);
         std::thread::spawn(move || {
             if let Err(error) = crate::integration::register() {
-                let _ = tx.send(Action::ShellError(format!("系统右键菜单注册失败：{error}")));
+                let _ = tx.send(Action::ShellError(format!(
+                    "{}{error}",
+                    crate::i18n::current().strings().shell_menu_failed
+                )));
             }
         });
         Ok(shell)
@@ -304,11 +308,12 @@ impl Shell {
             },
             ..Default::default()
         };
+        let text = crate::i18n::current().strings();
         for (out, value) in data.szTip.iter_mut().zip(
             if self.tray.connected {
-                "Omdrop · 已连接 · 拖入文件即可发送"
+                text.tray_connected
             } else {
-                "Omdrop · 未连接 · 等待无线桥接"
+                text.tray_disconnected
             }
             .encode_utf16(),
         ) {
@@ -322,6 +327,12 @@ impl Shell {
         self.sync_tray();
     }
 
+    /// Refresh the tooltip after the interface language changes.
+    pub fn language_changed(&mut self) {
+        self.tray.dirty = true;
+        self.sync_tray();
+    }
+
     pub fn restore_tray(&mut self) {
         self.tray.applied = None;
         self.sync_tray();
@@ -332,7 +343,7 @@ impl Shell {
             self.tray_error_reported = true;
             if let Some(tx) = ACTIONS.get() {
                 let _ = tx.send(Action::ShellError(
-                    "Windows 暂时无法更新托盘图标，将在下一次连接状态检查时重试。".into(),
+                    crate::i18n::current().strings().err_tray_update.into(),
                 ));
             }
         }
@@ -392,7 +403,9 @@ impl Shell {
         std::thread::Builder::new()
             .name("omdrop-file-picker".into())
             .spawn(move || {
-                let result = crate::picker::choose(owner).map_err(|error| error.to_string());
+                let language = crate::i18n::current();
+                let result =
+                    crate::picker::choose(owner, language).map_err(|error| error.to_string());
                 let _ = tx.send(Action::FilesPicked(result));
             })?;
         Ok(())
@@ -404,8 +417,10 @@ impl Shell {
         std::thread::Builder::new()
             .name("omdrop-directory-picker".into())
             .spawn(move || {
-                let result = crate::picker::choose_directory(owner)
-                    .map_err(|error| format!("选择接收保存目录失败：{error}"));
+                let language = crate::i18n::current();
+                let result = crate::picker::choose_directory(owner, language).map_err(|error| {
+                    format!("{}{error}", language.strings().err_receive_dir_picker)
+                });
                 let _ = tx.send(Action::DownloadDirectoryChosen(result));
             })
             .context("启动接收保存目录选择器失败")?;
@@ -434,9 +449,8 @@ impl Shell {
                             ..Default::default()
                         };
                         unsafe { ShellExecuteExW(&mut info) }.with_context(|| {
-                            format!(
-                                "无法打开“{}”",
-                                path.file_name().unwrap_or_default().to_string_lossy()
+                            crate::i18n::current().cannot_open_file(
+                                &path.file_name().unwrap_or_default().to_string_lossy(),
                             )
                         })?;
                     }
@@ -623,10 +637,14 @@ unsafe extern "system" fn subclass(
 unsafe fn tray_menu(hwnd: HWND) -> Option<Action> {
     unsafe {
         let menu = CreatePopupMenu().ok()?;
-        let _ = AppendMenuW(menu, MF_STRING, 1, w!("打开 / 关闭分享窗口"));
-        let _ = AppendMenuW(menu, MF_STRING, 2, w!("选择文件…"));
+        let text = crate::i18n::current().strings();
+        let toggle = HSTRING::from(text.tray_toggle);
+        let choose = HSTRING::from(text.tray_choose);
+        let quit = HSTRING::from(text.tray_quit);
+        let _ = AppendMenuW(menu, MF_STRING, 1, &toggle);
+        let _ = AppendMenuW(menu, MF_STRING, 2, &choose);
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-        let _ = AppendMenuW(menu, MF_STRING, 3, w!("退出 Omdrop"));
+        let _ = AppendMenuW(menu, MF_STRING, 3, &quit);
         let mut point = POINT::default();
         let _ = GetCursorPos(&mut point);
         let _ = SetForegroundWindow(hwnd);
@@ -767,6 +785,7 @@ mod tests {
         let mut state = TrayState {
             connected: true,
             applied: Some(true),
+            dirty: false,
         };
         state.applied = None;
         assert_eq!(state.pending(), Some(TrayUpdate::Add));

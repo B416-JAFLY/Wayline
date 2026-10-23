@@ -94,11 +94,20 @@ pub(crate) struct Registry {
     pub closing: bool,
     pub used: bool,
     pub maintenance_failed: bool,
+    pub radio_reconfiguring: bool,
 }
 impl Registry {
     pub fn acquire(&mut self, kind: SessionKind) -> Result<u64, &'static str> {
         if self.closing {
             return Err("stopping");
+        }
+        if self.radio_reconfiguring
+            && matches!(
+                kind,
+                SessionKind::Send | SessionKind::Receive | SessionKind::Maintenance
+            )
+        {
+            return Err("busy");
         }
         if self
             .entries
@@ -138,6 +147,15 @@ impl Registry {
                 .entries
                 .values()
                 .any(|k| *k == SessionKind::Maintenance)
+    }
+    pub fn radio_reconfiguration_busy(&self) -> bool {
+        self.radio_reconfiguring
+            || self.entries.values().any(|kind| {
+                matches!(
+                    kind,
+                    SessionKind::Send | SessionKind::Receive | SessionKind::Maintenance
+                )
+            })
     }
 }
 
@@ -294,14 +312,26 @@ mod tests {
         let mut r = Registry::default();
         let a = r.acquire(SessionKind::Client).unwrap();
         let b = r.acquire(SessionKind::Client).unwrap();
+        assert!(!r.radio_reconfiguration_busy());
+        r.radio_reconfiguring = true;
+        assert!(r.radio_reconfiguration_busy());
+        assert_eq!(r.acquire(SessionKind::Send), Err("busy"));
+        assert_eq!(r.acquire(SessionKind::Receive), Err("busy"));
+        assert_eq!(r.acquire(SessionKind::Maintenance), Err("busy"));
+        let client = r.acquire(SessionKind::Client).unwrap();
+        r.release(client, false, RunMode::Resident);
+        r.radio_reconfiguring = false;
         let s = r.acquire(SessionKind::Send).unwrap();
+        assert!(r.radio_reconfiguration_busy());
         let recv = r.acquire(SessionKind::Receive).unwrap();
         assert_eq!(r.acquire(SessionKind::Send), Err("busy"));
         assert_eq!(r.acquire(SessionKind::Receive), Err("busy"));
         assert_eq!(r.acquire(SessionKind::Maintenance), Err("busy"));
         r.release(s, false, RunMode::Resident);
         r.release(recv, false, RunMode::Resident);
+        assert!(!r.radio_reconfiguration_busy());
         let m = r.acquire(SessionKind::Maintenance).unwrap();
+        assert!(r.radio_reconfiguration_busy());
         assert_eq!(r.acquire(SessionKind::Send), Err("busy"));
         r.release(m, false, RunMode::Resident);
         assert!(r.maintenance());

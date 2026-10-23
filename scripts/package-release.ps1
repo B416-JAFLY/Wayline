@@ -3,6 +3,10 @@
 param(
     [Parameter(Mandatory = $true)][string]$OutputDirectory,
     [string]$FirmwarePackage,
+    [string]$C5UartFirmwarePackage,
+    [string]$C5NativeUsbFirmwarePackage,
+    [string]$S3HeadlessUartFirmwarePackage,
+    [string]$S3HeadlessNativeUsbFirmwarePackage,
     [string]$ToolDirectory,
     [ValidateSet('Desktop', 'Rust', 'Cli')][string]$Runtime = 'Desktop',
     [switch]$IncludeCli,
@@ -136,10 +140,14 @@ if (($bridge | ConvertTo-Json -Depth 6 -Compress) -cne ($hostRecord.bridge | Con
 Add-ReleaseFile (Join-Path $root 'target/release/bridge-licenses/Wintun-LICENSE.txt') 'licenses/wintun-LICENSE.txt'
 }
 $firmware = $null
+$firmwareProfiles = @()
 $tool = $null
 if ($Runtime -eq 'Desktop') {
-    if (-not $FirmwarePackage -or -not $ToolDirectory) { throw 'Desktop packaging requires -FirmwarePackage and -ToolDirectory.' }
+    if (-not $FirmwarePackage -or -not $S3HeadlessUartFirmwarePackage -or -not $S3HeadlessNativeUsbFirmwarePackage -or -not $C5UartFirmwarePackage -or -not $C5NativeUsbFirmwarePackage -or -not $ToolDirectory) {
+        throw 'Desktop packaging requires Cardputer, headless S3 UART0/Native USB, C5 UART0/Native USB packages and the pinned esptool package.'
+    }
     $firmware = Test-FirmwarePackage $FirmwarePackage
+    if ($firmware.board -ne 'cardputer-adv') { throw 'The default desktop firmware package must be Cardputer Adv.' }
     $tool = Get-Content -LiteralPath (Join-Path $ToolDirectory 'tool.json') -Raw | ConvertFrom-Json
     if ($firmware.formatVersion -ne 1 -or $firmware.board -ne 'cardputer-adv' -or $firmware.chip -ne 'esp32s3' -or
         $firmware.flashSize -ne 8388608 -or $firmware.protocolVersion -ne 2 -or $firmware.idfVersion -ne '6.0' -or
@@ -162,6 +170,23 @@ if ($Runtime -eq 'Desktop') {
         throw 'esptool license/source checksum mismatch.'
     }
     Add-ReleaseTree $FirmwarePackage 'firmware'
+    $firmwareProfiles += $firmware.board
+    foreach ($profilePackage in @(
+        @{ path = $S3HeadlessUartFirmwarePackage; board = 'esp32s3-uart0' },
+        @{ path = $S3HeadlessNativeUsbFirmwarePackage; board = 'esp32s3-native-usb' },
+        @{ path = $C5UartFirmwarePackage; board = 'esp32c5-uart0' },
+        @{ path = $C5NativeUsbFirmwarePackage; board = 'esp32c5-native-usb' }
+    )) {
+        if (-not $profilePackage.path) { continue }
+        $profileManifest = Test-FirmwarePackage $profilePackage.path
+        if ($profileManifest.board -ne $profilePackage.board -or
+            $profileManifest.sourceRevision -ne $firmware.sourceRevision -or
+            $profileManifest.toolVersion -ne $firmware.toolVersion) {
+            throw "Firmware package does not match profile $($profilePackage.board) or the default release build."
+        }
+        Add-ReleaseTree $profilePackage.path "firmware/profiles/$($profilePackage.board)"
+        $firmwareProfiles += $profilePackage.board
+    }
     Add-ReleaseTree $ToolDirectory 'tools/esptool'
     Add-ReleaseFile (Join-Path $root 'firmware/assets/OFL.txt') 'licenses/firmware-font-OFL.txt'
     Add-CargoLicenses (Join-Path $root 'firmware/Cargo.toml') 'firmware-rust' ''
@@ -196,7 +221,7 @@ foreach ($relative in $generated.Keys | Sort-Object) {
     [IO.File]::WriteAllText($target, $generated[$relative], [Text.UTF8Encoding]::new($false))
     $entries += [ordered]@{ path = $relative; length = (Get-Item -LiteralPath $target).Length; sha256 = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant() }
 }
-$manifest = [ordered]@{ schemaVersion = 2; platform = 'windows-x64'; runtime = $Runtime; version = $Version; sourceRevision = $sourceRevision; radioBackend = 'rust'; bridge = $bridge; vcRuntimeVersion = $vcVersion; firmwareVersion = $(if ($firmware) { $firmware.firmwareVersion } else { $null }); toolVersion = $(if ($tool) { $tool.version } else { $null }); files = $entries }
+$manifest = [ordered]@{ schemaVersion = 2; platform = 'windows-x64'; runtime = $Runtime; version = $Version; sourceRevision = $sourceRevision; radioBackend = 'rust'; bridge = $bridge; vcRuntimeVersion = $vcVersion; firmwareVersion = $(if ($firmware) { $firmware.firmwareVersion } else { $null }); firmwareProfiles = $firmwareProfiles; toolVersion = $(if ($tool) { $tool.version } else { $null }); files = $entries }
 [IO.File]::WriteAllText((Join-Path $OutputDirectory 'release.json'), ($manifest | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
 $null = Test-ReleasePackage $OutputDirectory
 Write-Host "Offline package ready: $OutputDirectory"

@@ -3344,6 +3344,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "toml 1.1.8+spec-1.1.0",
  "unicode-segmentation",
  "windows 0.62.2",
  "windows-core 0.62.2",

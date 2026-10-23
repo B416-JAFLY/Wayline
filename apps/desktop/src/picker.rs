@@ -1,10 +1,8 @@
 //! The shell dialog runs on its own STA, never inside GPUI's foreground executor.
+use crate::i18n::Language;
 use anyhow::Result;
 use std::{ffi::OsString, os::windows::ffi::OsStringExt, path::PathBuf};
-use windows::{
-    Win32::{Foundation::*, System::Com::*, UI::Shell::*},
-    core::w,
-};
+use windows::Win32::{Foundation::*, System::Com::*, UI::Shell::*};
 
 pub(crate) struct Apartment;
 impl Apartment {
@@ -19,8 +17,9 @@ impl Drop for Apartment {
     }
 }
 
-pub fn choose(owner: usize) -> Result<Option<Vec<PathBuf>>> {
+pub fn choose(owner: usize, language: Language) -> Result<Option<Vec<PathBuf>>> {
     let _apartment = Apartment::new()?;
+    let text = language.strings();
     unsafe {
         let dialog: IFileOpenDialog =
             CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)?;
@@ -33,8 +32,8 @@ pub fn choose(owner: usize) -> Result<Option<Vec<PathBuf>>> {
                 | FOS_NOCHANGEDIR
                 | FOS_DONTADDTORECENT,
         )?;
-        dialog.SetTitle(w!("选择要发送的文件"))?;
-        dialog.SetOkButtonLabel(w!("选择文件"))?;
+        dialog.SetTitle(&windows::core::HSTRING::from(text.picker_send_title))?;
+        dialog.SetOkButtonLabel(&windows::core::HSTRING::from(text.choose_files))?;
         dialog.SetClientGuid(&windows::core::GUID::from_u128(
             0x8eae56d5_7919_466c_a218_433076dfad07,
         ))?;
@@ -65,8 +64,9 @@ pub fn choose(owner: usize) -> Result<Option<Vec<PathBuf>>> {
     }
 }
 
-pub fn choose_directory(owner: usize) -> Result<Option<PathBuf>> {
+pub fn choose_directory(owner: usize, language: Language) -> Result<Option<PathBuf>> {
     let _apartment = Apartment::new()?;
+    let text = language.strings();
     // SAFETY: this worker owns its STA and all COM interfaces stay on this thread,
     // dropping before Apartment uninitializes COM. Windows borrows the owner HWND
     // only for the modal dialog; no GPUI state crosses threads. Shell-allocated
@@ -82,8 +82,8 @@ pub fn choose_directory(owner: usize) -> Result<Option<PathBuf>> {
                 | FOS_NOCHANGEDIR
                 | FOS_DONTADDTORECENT,
         )?;
-        dialog.SetTitle(w!("选择接收保存目录"))?;
-        dialog.SetOkButtonLabel(w!("选择目录"))?;
+        dialog.SetTitle(&windows::core::HSTRING::from(text.picker_directory_title))?;
+        dialog.SetOkButtonLabel(&windows::core::HSTRING::from(text.picker_directory_ok))?;
         dialog.SetClientGuid(&windows::core::GUID::from_u128(
             0x9628bd75_7d80_42de_b44d_e0304c159d90,
         ))?;

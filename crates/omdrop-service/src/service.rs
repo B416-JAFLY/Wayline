@@ -134,10 +134,12 @@ pub async fn run(
     let session_name = format!("{}.sessions", options.pipe);
     let session_listener = server::listen(&session_name, true)?;
     let default_bridge = std::env::current_exe()?.with_file_name("omdrop-bridge.exe");
+    let target_file = options.data_dir.join("radio-target.txt");
     let mut radio = Supervisor::new(
         WindowsBackend {
             data_dir: options.data_dir.clone(),
             default_bridge,
+            target_file,
         },
         config,
         config_path,
@@ -277,7 +279,23 @@ pub async fn run(
                 // Clients that gave up before dispatch must not leave surprise
                 // start/stop commands waiting behind a busy queue.
                 if !control.response.is_closed() {
-                    let reply = radio.command(control.request, start.elapsed());
+                    let reconfigures_radio = control.request.cmd == "set"
+                        && (control.request.port.is_some() || control.request.channel.is_some());
+                    let in_use = registry.radio_reconfiguration_busy();
+                    let before = radio.status();
+                    let was_ready = before.state == "running" && before.awdl0 && before.error.is_none();
+                    let reply = if reconfigures_radio && in_use {
+                        before.with_error("radio is busy; finish transfers and close receivers before changing its configuration")
+                    } else {
+                        radio.command(control.request, start.elapsed())
+                    };
+                    if reconfigures_radio
+                        && !in_use
+                        && was_ready
+                        && matches!(reply.state.as_str(), "stopping" | "starting")
+                    {
+                        registry.radio_reconfiguring = true;
+                    }
                     let _ = control.response.send(reply);
                 }
             }
@@ -316,6 +334,11 @@ pub async fn run(
             }
         }
         let mut snapshot = radio.status();
+        if registry.radio_reconfiguring
+            && !matches!(snapshot.state.as_str(), "stopping" | "starting")
+        {
+            registry.radio_reconfiguring = false;
+        }
         if registry.maintenance_failed && !registry.closing {
             snapshot.state = "maintenance-failed".into();
             snapshot.error = Some(

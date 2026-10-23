@@ -28,6 +28,8 @@ pub struct Status {
     pub state: String,
     pub port: Option<String>,
     pub channel: u16,
+    #[serde(default)]
+    pub target: Option<String>,
     pub awdl0: bool,
     pub error: Option<String>,
     pub enabled: bool,
@@ -58,6 +60,7 @@ mod tests {
             state: "stopped".into(),
             port: None,
             channel: 6,
+            target: None,
             awdl0: false,
             error: None,
             enabled: false,

@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-pub const HELP: &str = "omdrop-cli status [--json]\nomdrop-cli doctor [--json]\nomdrop-cli discover [--timeout 15] [--json]\nomdrop-cli send [--to NAME] [--format auto|gzip|dvzip] [--json] -- FILE...\nomdrop-cli receive [--accept-all] [--save DIR] [--decision-timeout 60] [--json]\nomdrop-cli receive --bind [::1]:8771 --accept-all [--save DIR]\nomdrop-cli firmware info [--manifest PATH] [--json]\nomdrop-cli firmware flash --port COMx --board cardputer-adv [--manifest PATH] [--tool PATH]\n                          [--reinstall --yes-replace] [--json]\n无线命令可用 --name NAME、--link-local ADDRESS --iface-index N 覆盖本次设置。\n发现和发送可用 --no-ble / --legacy-ble。默认自动选择 awdl0。\n--reinstall --yes-replace 会替换现有程序及分区布局，不保证保留其他固件数据。";
+pub const HELP: &str = "omdrop-cli status [--json]\nomdrop-cli doctor [--json]\nomdrop-cli radio status [--json]\nomdrop-cli radio set --band 2.4ghz|5ghz --channel 6|44|149 [--json]\nomdrop-cli discover [--timeout 15] [--json]\nomdrop-cli send [--to NAME] [--format auto|gzip|dvzip] [--json] -- FILE...\nomdrop-cli receive [--accept-all] [--save DIR] [--decision-timeout 60] [--json]\nomdrop-cli receive --bind [::1]:8771 --accept-all [--save DIR]\nomdrop-cli firmware info [--board PROFILE] [--manifest PATH] [--json]\nomdrop-cli firmware flash --port COMx --board PROFILE [--manifest PATH] [--tool PATH]\n                          [--reinstall --yes-replace] [--json]\n固件 profile：cardputer-adv、esp32s3-uart0、esp32s3-native-usb、esp32c5-uart0、esp32c5-native-usb。\n无线命令可用 --name NAME、--link-local ADDRESS --iface-index N 覆盖本次设置。\n发现和发送可用 --no-ble / --legacy-ble。默认自动选择 awdl0。\n--reinstall --yes-replace 会替换现有程序及分区布局，不保证保留其他固件数据。";
 
 pub struct Args {
     pub command: String,
@@ -29,6 +29,8 @@ pub struct Args {
     pub manifest: Option<PathBuf>,
     pub tool: Option<PathBuf>,
     pub port: Option<String>,
+    pub band: Option<String>,
+    pub channel: Option<u16>,
     pub board: Option<String>,
     pub reinstall: bool,
     pub yes_replace: bool,
@@ -55,6 +57,12 @@ impl Args {
                 args.next()
                     .ok_or_else(|| Failure::policy("firmware 需要 info 或 flash"))?
             )
+        } else if command == "radio" {
+            format!(
+                "radio {}",
+                args.next()
+                    .ok_or_else(|| Failure::policy("radio 需要 status 或 set"))?
+            )
         } else {
             command
         };
@@ -79,6 +87,8 @@ impl Args {
             manifest: None,
             tool: None,
             port: None,
+            band: None,
+            channel: None,
             board: None,
             reinstall: false,
             yes_replace: false,
@@ -125,7 +135,7 @@ impl Args {
                     "--decision-timeout",
                 ]
                 .contains(&argument.as_str()),
-                "firmware info" => argument == "--manifest",
+                "firmware info" => ["--manifest", "--board"].contains(&argument.as_str()),
                 "firmware flash" => [
                     "--manifest",
                     "--tool",
@@ -135,6 +145,8 @@ impl Args {
                     "--yes-replace",
                 ]
                 .contains(&argument.as_str()),
+                "radio status" => false,
+                "radio set" => ["--band", "--channel"].contains(&argument.as_str()),
                 _ => false,
             };
             if !allowed && !matches!(argument.as_str(), "--json" | "--help" | "-h") {
@@ -173,6 +185,8 @@ impl Args {
                 "--manifest" => result.manifest = Some(value()?.into()),
                 "--tool" => result.tool = Some(value()?.into()),
                 "--port" => result.port = Some(value()?),
+                "--band" => result.band = Some(value()?),
+                "--channel" => result.channel = Some(value()?.parse().map_err(Failure::policy)?),
                 "--board" => result.board = Some(value()?),
                 "--reinstall" => result.reinstall = true,
                 "--yes-replace" => result.yes_replace = true,
@@ -203,7 +217,26 @@ impl Args {
             return Err(Failure::policy("此命令不接受文件参数"));
         }
         match self.command.as_str() {
-            "status" | "doctor" | "discover" | "firmware info" => {}
+            "status" | "doctor" | "discover" | "radio status" => {}
+            "radio set" => {
+                let band = self
+                    .band
+                    .as_deref()
+                    .ok_or_else(|| Failure::policy("radio set 需要 --band"))?;
+                let channel = self
+                    .channel
+                    .ok_or_else(|| Failure::policy("radio set 需要 --channel"))?;
+                let matches = match band {
+                    "2.4ghz" => channel == 6,
+                    "5ghz" => matches!(channel, 44 | 149),
+                    _ => false,
+                };
+                if !matches {
+                    return Err(Failure::policy(
+                        "频段与信道不匹配；2.4ghz 使用信道 6，5ghz 使用信道 44 或 149",
+                    ));
+                }
+            }
             "send" => {
                 if self.target.is_none() && (!terminal || self.json) {
                     return Err(Failure::policy(
@@ -239,6 +272,21 @@ impl Args {
                 }
                 if self.yes_replace && !self.reinstall {
                     return Err(Failure::policy("--yes-replace 必须与 --reinstall 同时使用"));
+                }
+                if !omdrop_flash::supported_profiles()
+                    .iter()
+                    .any(|profile| Some(profile.id) == self.board.as_deref())
+                {
+                    return Err(Failure::policy("不支持的 --board 固件 profile"));
+                }
+            }
+            "firmware info" => {
+                if self.board.as_deref().is_some_and(|board| {
+                    !omdrop_flash::supported_profiles()
+                        .iter()
+                        .any(|profile| profile.id == board)
+                }) {
+                    return Err(Failure::policy("不支持的 --board 固件 profile"));
                 }
             }
             _ => return Err(Failure::policy(format!("未知命令：{}", self.command))),
@@ -301,6 +349,24 @@ mod tests {
             true
         )
         .is_ok());
+        for profile in [
+            "cardputer-adv",
+            "esp32s3-uart0",
+            "esp32s3-native-usb",
+            "esp32c5-uart0",
+            "esp32c5-native-usb",
+        ] {
+            assert!(parse(
+                &["firmware", "flash", "--port", "COM8", "--board", profile],
+                false,
+            )
+            .is_ok());
+        }
+        assert!(parse(
+            &["firmware", "flash", "--port", "COM8", "--board", "esp32c5"],
+            false,
+        )
+        .is_err());
     }
     #[test]
     fn unicode_paths_and_literal_option_like_filenames_are_preserved() {
@@ -319,5 +385,25 @@ mod tests {
         assert!(!parsed.json);
         assert_eq!(parsed.files[0], PathBuf::from("C:\\目录 有空格\\照片.jpg"));
         assert_eq!(parsed.files[1], PathBuf::from("--json"));
+    }
+
+    #[test]
+    fn radio_band_and_channel_must_form_a_supported_pair() {
+        assert!(parse(
+            &["radio", "set", "--band", "2.4ghz", "--channel", "6"],
+            false
+        )
+        .is_ok());
+        assert!(parse(
+            &["radio", "set", "--band", "5ghz", "--channel", "149"],
+            false
+        )
+        .is_ok());
+        assert!(parse(&["radio", "set", "--band", "5ghz", "--channel", "6"], false).is_err());
+        assert!(parse(
+            &["radio", "set", "--band", "5ghz", "--channel", "36"],
+            false
+        )
+        .is_err());
     }
 }

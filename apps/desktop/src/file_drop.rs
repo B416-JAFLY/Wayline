@@ -52,27 +52,29 @@ impl Drop for Medium {
 }
 
 fn read_files(data: &IDataObject) -> Result<Vec<PathBuf>> {
+    let text = crate::i18n::current().strings();
     let medium = Medium(unsafe { data.GetData(&file_format())? });
     ensure!(
         medium.0.tymed == TYMED_HGLOBAL.0 as u32,
-        "无效的文件拖拽数据"
+        text.err_drag_invalid_data
     );
     let global = unsafe { medium.0.u.hGlobal };
-    ensure!(!global.is_invalid(), "文件拖拽数据为空");
+    ensure!(!global.is_invalid(), text.err_drag_empty);
     // CF_HDROP is an HGLOBAL handle, not a pointer to another handle.
     read_hdrop(HDROP(global.0))
 }
 
 fn read_hdrop(drop: HDROP) -> Result<Vec<PathBuf>> {
+    let text = crate::i18n::current().strings();
     let count = unsafe { DragQueryFileW(drop, u32::MAX, None) };
-    ensure!(count > 0 && count <= 16384, "未能读取拖入的文件");
+    ensure!(count > 0 && count <= 16384, text.err_drag_count);
     let mut paths = Vec::with_capacity(count as usize);
     for index in 0..count {
         let len = unsafe { DragQueryFileW(drop, index, None) } as usize;
-        ensure!(len > 0 && len <= 32767, "无效的拖拽文件路径");
+        ensure!(len > 0 && len <= 32767, text.err_drag_path);
         let mut name = vec![0u16; len + 1];
         let copied = unsafe { DragQueryFileW(drop, index, Some(&mut name)) } as usize;
-        ensure!(copied == len, "未能完整读取拖拽文件路径");
+        ensure!(copied == len, text.err_drag_incomplete);
         paths.push(PathBuf::from(OsString::from_wide(&name[..len])));
     }
     Ok(paths)
@@ -167,9 +169,10 @@ impl IDropTarget_Impl for FileDropTarget_Impl {
                         }
                     }
                     Err(error) => {
-                        let _ = self
-                            .tx
-                            .send(Action::ShellError(format!("读取拖拽文件失败：{error}")));
+                        let _ = self.tx.send(Action::ShellError(format!(
+                            "{}{error}",
+                            crate::i18n::current().strings().err_drag_read
+                        )));
                     }
                 }
             }

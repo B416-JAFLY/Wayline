@@ -42,6 +42,7 @@ use windows_sys::Win32::{
 pub struct WindowsBackend {
     pub data_dir: PathBuf,
     pub default_bridge: PathBuf,
+    pub target_file: PathBuf,
 }
 
 impl Backend for WindowsBackend {
@@ -52,6 +53,14 @@ impl Backend for WindowsBackend {
     }
     fn awdl_ready(&mut self) -> io::Result<bool> {
         awdl_ready()
+    }
+    fn radio_target(&mut self) -> Option<String> {
+        let target = fs::read_to_string(&self.target_file).ok()?;
+        match target.trim() {
+            "esp32s3" => Some("esp32s3".into()),
+            "esp32c5" => Some("esp32c5".into()),
+            _ => None,
+        }
     }
     fn spawn(&mut self, config: &Config, port: &str) -> io::Result<BridgeProcess> {
         let device = crate::device_lock::DeviceGuard::try_acquire(port)?;
@@ -77,6 +86,11 @@ impl Backend for WindowsBackend {
             ));
         }
         fs::create_dir_all(&self.data_dir)?;
+        match fs::remove_file(&self.target_file) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
         let event = StopEvent::new()?;
         let console = OpenOptions::new()
             .create(true)
@@ -88,6 +102,7 @@ impl Backend for WindowsBackend {
             .args(args)
             .current_dir(&self.data_dir)
             .env("OMDROP_BRIDGE_STOP_EVENT", &event.name)
+            .env("OMDROP_BRIDGE_TARGET_FILE", &self.target_file)
             .stdin(Stdio::null())
             .stdout(console.try_clone()?)
             .stderr(console)

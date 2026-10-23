@@ -86,6 +86,13 @@ try {
     $firmwareManifestPath = Join-Path $firmwareDirectory 'manifest.json'
     [IO.File]::WriteAllText($firmwareManifestPath, ($firmwareManifest | ConvertTo-Json -Depth 6))
     $null = Test-FirmwarePackage $firmwareDirectory
+    foreach ($s3HeadlessProfile in @('esp32s3-uart0', 'esp32s3-native-usb')) {
+        $firmwareManifest.board = $s3HeadlessProfile
+        [IO.File]::WriteAllText($firmwareManifestPath, ($firmwareManifest | ConvertTo-Json -Depth 6))
+        $null = Test-FirmwarePackage $firmwareDirectory
+    }
+    $firmwareManifest.board = 'cardputer-adv'
+    [IO.File]::WriteAllText($firmwareManifestPath, ($firmwareManifest | ConvertTo-Json -Depth 6))
     $boot[12] = 0
     [IO.File]::WriteAllBytes((Join-Path $firmwareDirectory 'application.bin'), $boot)
     Expect-Failure { Test-FirmwarePackage $firmwareDirectory }
@@ -101,6 +108,54 @@ try {
     $firmwareManifest.layoutId = $imageEntries[1].sha256
     [IO.File]::WriteAllText($firmwareManifestPath, ($firmwareManifest | ConvertTo-Json -Depth 6))
     Expect-Failure { Test-FirmwarePackage $firmwareDirectory }
+
+    $c5Directory = Join-Path $directory 'c5-firmware-fixture'
+    New-Item -ItemType Directory -Path $c5Directory | Out-Null
+    $c5Boot = New-Object byte[] 4096
+    $c5Boot[0] = 0xe9; $c5Boot[12] = 0x17
+    $c5Application = New-Object byte[] 4096
+    $c5Application[0] = 0xe9; $c5Application[12] = 0x17
+    $c5Table = New-Object byte[] 3072
+    for ($index = 0; $index -lt $c5Table.Length; $index++) { $c5Table[$index] = 0xff }
+    foreach ($partition in @(
+        @{ slot=0; type=1; subtype=2; offset=0x9000; size=0x6000; name='nvs' },
+        @{ slot=1; type=1; subtype=1; offset=0xf000; size=0x1000; name='phy_init' },
+        @{ slot=2; type=0; subtype=0; offset=0x10000; size=0x1f0000; name='factory' }
+    )) {
+        $start = $partition.slot * 32
+        $c5Table[$start] = 0xaa; $c5Table[$start + 1] = 0x50
+        $c5Table[$start + 2] = $partition.type; $c5Table[$start + 3] = $partition.subtype
+        [BitConverter]::GetBytes([uint32]$partition.offset).CopyTo($c5Table, $start + 4)
+        [BitConverter]::GetBytes([uint32]$partition.size).CopyTo($c5Table, $start + 8)
+        [Text.Encoding]::ASCII.GetBytes($partition.name).CopyTo($c5Table, $start + 12)
+    }
+    [IO.File]::WriteAllBytes((Join-Path $c5Directory 'bootloader.bin'), $c5Boot)
+    [IO.File]::WriteAllBytes((Join-Path $c5Directory 'partition-table.bin'), $c5Table)
+    [IO.File]::WriteAllBytes((Join-Path $c5Directory 'application.bin'), $c5Application)
+    $c5Images = @()
+    foreach ($image in @(
+        @{ kind='bootloader'; offset=8192; path='bootloader.bin' },
+        @{ kind='partition-table'; offset=32768; path='partition-table.bin' },
+        @{ kind='application'; offset=65536; path='application.bin' }
+    )) {
+        $path = Join-Path $c5Directory $image.path
+        $c5Images += @{ kind=$image.kind; path=$image.path; offset=$image.offset; length=(Get-Item -LiteralPath $path).Length; sha256=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash }
+    }
+    $c5Manifest = @{ formatVersion=1; board='esp32c5-uart0'; chip='esp32c5'; flashSize=2097152;
+        firmwareVersion='fixture'; sourceRevision=('a' * 40); protocolVersion=2; idfVersion='6.0';
+        toolVersion='5.0.2'; layoutId=$c5Images[1].sha256; images=$c5Images }
+    $c5ManifestPath = Join-Path $c5Directory 'manifest.json'
+    [IO.File]::WriteAllText($c5ManifestPath, ($c5Manifest | ConvertTo-Json -Depth 6))
+    $null = Test-FirmwarePackage $c5Directory
+    $c5Manifest.board = 'esp32c5-native-usb'
+    [IO.File]::WriteAllText($c5ManifestPath, ($c5Manifest | ConvertTo-Json -Depth 6))
+    $null = Test-FirmwarePackage $c5Directory
+    $c5Application[12] = 9
+    [IO.File]::WriteAllBytes((Join-Path $c5Directory 'application.bin'), $c5Application)
+    $c5Manifest.board = 'esp32c5-uart0'
+    $c5Images[2].sha256 = (Get-FileHash -LiteralPath (Join-Path $c5Directory 'application.bin') -Algorithm SHA256).Hash
+    [IO.File]::WriteAllText($c5ManifestPath, ($c5Manifest | ConvertTo-Json -Depth 6))
+    Expect-Failure { Test-FirmwarePackage $c5Directory }
     Write-Host 'Release validation passed: service/CLI packages, paths/junctions, hashes, required runtime, duplicates, firmware chip/layout and installation target boundaries.'
 } finally {
     # Verify the absolute target remains this explicitly created temporary test directory.

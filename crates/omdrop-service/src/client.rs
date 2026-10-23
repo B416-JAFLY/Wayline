@@ -1,6 +1,11 @@
 //! Bounded JSON-line control client shared by desktop and CLI.
 use crate::protocol::{Request, Status};
-use std::{fmt, path::Path, time::Duration};
+use std::{
+    fmt,
+    path::Path,
+    thread,
+    time::{Duration, Instant},
+};
 
 pub const MAX_MESSAGE: usize = 8192;
 #[derive(Clone, Debug)]
@@ -67,6 +72,50 @@ impl Client {
     }
     pub fn status(&self) -> Result<Status, ClientError> {
         self.request(&Request::new("status"))
+    }
+    pub fn set_channel(&self, channel: u16) -> Result<Status, ClientError> {
+        if !matches!(channel, 6 | 44 | 149) {
+            return Err(ClientError::new(
+                ClientErrorKind::InvalidRequest,
+                "channel must be 6, 44 or 149",
+            ));
+        }
+        let mut request = Request::new("set");
+        request.channel = Some(channel);
+        self.request(&request)
+    }
+    pub fn set_channel_and_wait(
+        &self,
+        channel: u16,
+        timeout: Duration,
+    ) -> Result<Status, ClientError> {
+        let _ = self.set_channel(channel)?;
+        let deadline = Instant::now() + timeout;
+        loop {
+            let status = self.status()?;
+            if status.channel == channel
+                && status.state == "running"
+                && status.awdl0
+                && status.error.is_none()
+            {
+                return Ok(status);
+            }
+            if matches!(
+                status.state.as_str(),
+                "error" | "maintenance-failed" | "no-radio"
+            ) {
+                if let Some(error) = status.error {
+                    return Err(ClientError::new(ClientErrorKind::Service, error));
+                }
+            }
+            if Instant::now() >= deadline {
+                return Err(ClientError::new(
+                    ClientErrorKind::Timeout,
+                    format!("timed out waiting for channel {channel} to become ready"),
+                ));
+            }
+            thread::sleep(Duration::from_millis(250));
+        }
     }
     pub fn firewall(&self, exe: &Path) -> Result<Status, ClientError> {
         let mut request = Request::new("firewall");
@@ -245,6 +294,7 @@ mod tests {
             state: "running".into(),
             port: Some("COM123".into()),
             channel: 6,
+            target: Some("esp32s3".into()),
             awdl0: true,
             error: error.map(str::to_owned),
             enabled: true,

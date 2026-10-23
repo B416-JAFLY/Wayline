@@ -281,11 +281,10 @@ impl Model {
                 active.phase = Phase::Confirming;
             }
             ReceiverEvent::Received { transfer, files } if transfer.id == active.id => {
-                let message = format!(
-                    "已接收来自 {} 的 {} 个文件，已保存到 {}",
-                    active.sender,
+                let message = crate::i18n::current().received_notice(
+                    &active.sender,
                     files.len(),
-                    active.save_dir.display()
+                    &active.save_dir.display().to_string(),
                 );
                 self.active = None;
                 self.show_notice(message, NoticeKind::Success);
@@ -295,12 +294,13 @@ impl Model {
                 kind,
                 error,
             } if transfer_id == &active.id => {
+                let text = crate::i18n::current().strings();
                 let message = match kind {
-                    omdrop_core::TransferFailureKind::Cancelled => "接收已取消",
-                    omdrop_core::TransferFailureKind::Declined => "已拒绝接收",
-                    omdrop_core::TransferFailureKind::Validation => "文件校验未通过，请重新发送",
-                    omdrop_core::TransferFailureKind::Connection => "连接中断或超时，请重新发送",
-                    _ => "暂时无法接收，请稍后重试",
+                    omdrop_core::TransferFailureKind::Cancelled => text.receive_cancelled,
+                    omdrop_core::TransferFailureKind::Declined => text.receive_declined_notice,
+                    omdrop_core::TransferFailureKind::Validation => text.receive_validation,
+                    omdrop_core::TransferFailureKind::Connection => text.receive_connection,
+                    _ => text.receive_failed,
                 };
                 self.active = None;
                 // Keep the banner short; full diagnostics remain available on demand.
@@ -359,7 +359,10 @@ impl ReceiverHost {
                             }
                             desired = command;
                             retry_at = Instant::now();
-                            let _ = events.send(Event::ReceiverStatus(Err("等待无线连接".into())));
+                            let _ = events.send(Event::ReceiverStatus(Err(crate::i18n::current()
+                                .strings()
+                                .receiver_waiting_radio
+                                .into())));
                         }
                     }
                     Ok(Command::ReloadDirectory) => {
@@ -367,7 +370,10 @@ impl ReceiverHost {
                             previous.stop();
                         }
                         retry_at = Instant::now();
-                        let _ = events.send(Event::ReceiverStatus(Err("正在更新接收目录…".into())));
+                        let _ = events.send(Event::ReceiverStatus(Err(crate::i18n::current()
+                            .strings()
+                            .receiver_updating_dir
+                            .into())));
                     }
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -377,10 +383,11 @@ impl ReceiverHost {
                     .is_some_and(|task| task.worker.is_finished())
                 {
                     let task = running.take().unwrap();
+                    let text = crate::i18n::current().strings();
                     let error = match task.worker.join() {
                         Ok(Err(error)) => error,
-                        Ok(Ok(())) => "接收服务已停止".into(),
-                        Err(_) => "接收服务意外退出".into(),
+                        Ok(Ok(())) => text.receiver_stopped.into(),
+                        Err(_) => text.receiver_crashed.into(),
                     };
                     log(&error);
                     let _ = events.send(Event::ReceiverStatus(Err(error)));
@@ -503,7 +510,7 @@ fn run(
             // before expiry. End the UI's waiting state even in that boundary race.
             let _ = prompt_events.send(Event::ReceiverActivity(ReceiverEvent::TransferFailed {
                 transfer_id: transfer.id.clone(),
-                error: "接收请求已拒绝或已过期，请重新发送".into(),
+                error: crate::i18n::current().strings().incoming_expired.into(),
                 kind: omdrop_core::TransferFailureKind::Cancelled,
             }));
         }
@@ -511,7 +518,8 @@ fn run(
     }));
     *shared_core
         .lock()
-        .map_err(|_| anyhow::anyhow!("接收状态锁不可用"))? = Arc::downgrade(&core);
+        .map_err(|_| anyhow::anyhow!(crate::i18n::current().strings().receiver_state_lock))? =
+        Arc::downgrade(&core);
     let (activity, activity_rx) = mpsc::channel();
     let advertised_name = name.to_owned();
     let advertised_id = service_id.clone();

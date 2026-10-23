@@ -20,6 +20,9 @@ pub trait Backend {
     fn find_port(&mut self) -> io::Result<Option<String>>;
     fn awdl_ready(&mut self) -> io::Result<bool>;
     fn spawn(&mut self, config: &Config, port: &str) -> io::Result<Self::Process>;
+    fn radio_target(&mut self) -> Option<String> {
+        None
+    }
 }
 
 /// The only owner of the child process. All transitions run on one task; stopping
@@ -44,6 +47,7 @@ impl<B: Backend> Supervisor<B> {
             state: "stopped".into(),
             port: None,
             channel: config.channel,
+            target: None,
             awdl0: false,
             error: None,
             enabled: config.enabled,
@@ -85,6 +89,7 @@ impl<B: Backend> Supervisor<B> {
                     next.port = port;
                 }
                 if let Some(channel) = req.channel {
+                    validate_target_channel(&self.status, channel)?;
                     next.channel = channel;
                 }
             }
@@ -96,6 +101,13 @@ impl<B: Backend> Supervisor<B> {
             }
         }
         next.validate()?;
+        let port_changed = next.port != self.config.port;
+        if port_changed && next.channel != 6 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "switch to channel 6 before changing the radio port, then confirm the new board capabilities",
+            ));
+        }
         if next != self.config {
             // Commit before changing the live process. Invalid/unwritable settings
             // leave both the saved config and the running child untouched.
@@ -160,6 +172,7 @@ impl<B: Backend> Supervisor<B> {
 
     pub fn tick(&mut self, now: Duration) {
         let executable = "omdrop-bridge.exe";
+        self.status.target = self.backend.radio_target();
         let adapter_error = match self.backend.awdl_ready() {
             Ok(up) => {
                 self.status.awdl0 = up;
@@ -275,6 +288,32 @@ impl<B: Backend> Supervisor<B> {
     }
 }
 
+fn validate_target_channel(status: &Status, channel: u16) -> io::Result<()> {
+    if !matches!(channel, 6 | 44 | 149) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "channel must be 6, 44 or 149",
+        ));
+    }
+    let target = status.target.as_deref();
+    if channel == 6
+        || (matches!((target, channel), (Some("esp32c5"), 44 | 149))
+            && status.state == "running"
+            && status.awdl0
+            && status.error.is_none())
+    {
+        return Ok(());
+    }
+    let message = if target == Some("esp32s3") {
+        "ESP32-S3 supports only channel 6"
+    } else if target == Some("esp32c5") {
+        "5 GHz requires a running ESP32-C5 radio"
+    } else {
+        "5 GHz requires a running ESP32-C5 radio; board capabilities are unknown"
+    };
+    Err(io::Error::new(io::ErrorKind::InvalidInput, message))
+}
+
 impl<B: Backend> Drop for Supervisor<B> {
     fn drop(&mut self) {
         if let Some(child) = &mut self.child {
@@ -314,6 +353,9 @@ mod tests {
     }
     impl Backend for Fake {
         type Process = Fake;
+        fn radio_target(&mut self) -> Option<String> {
+            Some("esp32c5".into())
+        }
         fn find_port(&mut self) -> io::Result<Option<String>> {
             Ok(self.0.borrow().present.then(|| "COM4".into()))
         }
@@ -337,6 +379,26 @@ mod tests {
     }
     fn secs(n: u64) -> Duration {
         Duration::from_secs(n)
+    }
+
+    #[test]
+    fn channel_validation_uses_the_identified_board_capabilities() {
+        let status = |target: Option<&str>, state: &str, awdl0: bool| Status {
+            state: state.into(),
+            port: Some("COM4".into()),
+            channel: 6,
+            target: target.map(str::to_owned),
+            awdl0,
+            error: None,
+            enabled: true,
+        };
+        assert!(validate_target_channel(&status(Some("esp32s3"), "running", true), 6).is_ok());
+        assert!(validate_target_channel(&status(Some("esp32s3"), "running", true), 44).is_err());
+        assert!(validate_target_channel(&status(Some("esp32c5"), "running", true), 44).is_ok());
+        assert!(validate_target_channel(&status(Some("esp32c5"), "running", true), 149).is_ok());
+        assert!(validate_target_channel(&status(Some("esp32c5"), "starting", false), 44).is_err());
+        assert!(validate_target_channel(&status(None, "running", true), 44).is_err());
+        assert!(validate_target_channel(&status(Some("esp32c5"), "running", true), 36).is_err());
     }
 
     #[test]
@@ -384,25 +446,35 @@ mod tests {
         let path = dir.path().join("config.json");
         let obs = Rc::new(RefCell::new(Observed {
             present: true,
+            adapter_up: true,
             ..Default::default()
         }));
         let mut s = Supervisor::new(Fake(obs.clone()), Config::default(), path.clone());
         s.tick(secs(0));
+        s.tick(secs(1));
         let bad = s.command(request(r#"{"cmd":"set","channel":7}"#), secs(1));
         assert!(bad.error.is_some());
         assert_eq!(obs.borrow().stops, 0);
         assert!(!path.exists());
-        s.command(
+        let unsafe_port_change = s.command(
             request(r#"{"cmd":"set","port":"COM9","channel":44}"#),
             secs(2),
         );
+        assert!(unsafe_port_change.error.is_some());
+        assert_eq!(obs.borrow().stops, 0);
+        assert!(!path.exists());
+        s.command(request(r#"{"cmd":"set","channel":44}"#), secs(2));
         assert_eq!(s.status().state, "stopping");
         assert_eq!(obs.borrow().starts.len(), 1);
         s.tick(secs(6));
         assert_eq!(obs.borrow().kills, 0);
         s.tick(secs(7));
         assert_eq!(obs.borrow().kills, 1);
-        assert_eq!(obs.borrow().starts.last().unwrap(), &("COM9".into(), 44));
+        assert_eq!(obs.borrow().starts.last().unwrap(), &("COM4".into(), 44));
+        s.tick(secs(7));
+        let port_change = s.command(request(r#"{"cmd":"set","port":"COM9"}"#), secs(7));
+        assert!(port_change.error.is_some());
+        assert_eq!(Config::load(&path).unwrap().port, "auto");
         s.shutdown(secs(8));
         obs.borrow_mut().exited = true;
         s.tick(secs(9));

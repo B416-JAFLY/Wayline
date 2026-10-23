@@ -165,9 +165,10 @@ fn command(exe: &Path) -> String {
 pub fn register() -> Result<()> {
     let _apartment = crate::picker::Apartment::new()?;
     let exe = std::env::current_exe()?;
+    let text = crate::i18n::current().strings();
     // Explorer may invoke a legacy verb once per selected file. The running
     // instance coalesces those activations into one selection and one window.
-    set_value(VERB, "", "通过 Omdrop 发送")?;
+    set_value(VERB, "", text.explorer_verb)?;
     set_value(VERB, "Icon", &format!("\"{}\",0", exe.display()))?;
     set_value(VERB, "MultiSelectModel", "Player")?;
     set_value(&format!(r"{VERB}\command"), "", &command(&exe))?;
@@ -175,7 +176,7 @@ pub fn register() -> Result<()> {
         let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
         link.SetPath(&HSTRING::from(exe.as_os_str()))?;
         link.SetArguments(w!("--send --"))?;
-        link.SetDescription(w!("使用 Omdrop 向附近的设备发送文件"))?;
+        link.SetDescription(&HSTRING::from(text.explorer_description))?;
         link.SetIconLocation(&HSTRING::from(exe.as_os_str()), 0)?;
         let persist: IPersistFile = link.cast()?;
         persist.Save(&HSTRING::from(shortcut_path()?.as_os_str()), true)?;

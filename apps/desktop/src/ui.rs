@@ -1,5 +1,6 @@
 use crate::{
     backend::{self, Event},
+    i18n::{self, Language},
     model::{Model, Phase, Visibility, file_size},
     native::{Action, Shell},
     preview::{FileKind, MAX_PREVIEWS},
@@ -25,6 +26,7 @@ enum ExitState {
 pub struct Capsule {
     model: Model,
     orb: crate::orb::ConnectionOrb,
+    language: Language,
     visibility: Visibility,
     shell: Option<Shell>,
     focus: FocusHandle,
@@ -39,7 +41,9 @@ pub struct Capsule {
     name_input: Option<Entity<crate::name_input::NameInput>>,
     name_input_subscription: Option<Subscription>,
     settings_open: bool,
+    language_menu_open: bool,
     settings_error: Option<String>,
+    radio_channel_pending: Option<u16>,
     name_saved: bool,
     device_name: String,
     receiver: crate::receiving::ReceiverHost,
@@ -58,17 +62,28 @@ pub struct Capsule {
 
 impl Capsule {
     pub fn new(window: &mut Window, cx: &mut Context<Self>, files: Vec<PathBuf>) -> Self {
+        let detected = Language::detect();
+        let (language, language_error) = match Language::load_preference() {
+            Ok(Some(language)) => (language, None),
+            Ok(None) => (detected, None),
+            Err(error) => (detected, Some(error)),
+        };
+        i18n::set_current(language);
+        let text = language.strings();
         let (device_name, mut settings_error) = match crate::settings::load() {
             Ok(name) => (name, None),
             Err(error) => (
                 crate::settings::default_name(),
-                Some(format!("读取设备名称失败：{error:#}")),
+                Some(format!("{}{error:#}", text.err_device_name_load)),
             ),
         };
+        if let Some(error) = language_error {
+            settings_error = Some(format!("{}{error}", text.err_language_load));
+        }
         let download_directory = match crate::receiving::save_directory() {
             Ok(directory) => Some(directory),
             Err(error) => {
-                settings_error = Some(format!("读取接收目录失败：{error:#}"));
+                settings_error = Some(format!("{}{error:#}", text.err_download_dir_load));
                 None
             }
         };
@@ -110,6 +125,7 @@ impl Capsule {
         Self {
             model: Model::default(),
             orb: crate::orb::ConnectionOrb::default(),
+            language,
             visibility: Visibility::Hidden,
             shell,
             focus: cx.focus_handle(),
@@ -124,13 +140,15 @@ impl Capsule {
             name_input: None,
             name_input_subscription: None,
             settings_open: false,
+            language_menu_open: false,
             settings_error,
+            radio_channel_pending: None,
             name_saved: false,
             device_name,
             receiver,
             monitor: Some(monitor),
             exit_state: None,
-            receiver_status: Err("正在启动接收服务…".into()),
+            receiver_status: Err(text.receiver_starting.into()),
             receive: crate::receiving::Model::default(),
             download_directory,
             receiver_declined_until: None,
@@ -156,10 +174,8 @@ impl Capsule {
                 match event {
                     Event::ShutdownDone(Ok(background_running)) => {
                         if background_running && let Some(shell) = &self.shell {
-                            shell.notify(
-                                "Omdrop 已退出",
-                                "其他客户端或常驻服务仍在使用无线，后台将继续运行。",
-                            );
+                            let text = self.language.strings();
+                            shell.notify(text.app_exited_title, text.app_exited_detail);
                         }
                         cx.quit();
                         return;
@@ -194,6 +210,11 @@ impl Capsule {
         self.workers.retain(|worker| !worker.is_finished());
         for event in events {
             match event {
+                Event::ShellError(error) => {
+                    self.model.error = Some(error);
+                    changed = true;
+                    continue;
+                }
                 Event::Firmware(event) => {
                     if self.firmware.apply(event) {
                         self.firmware_worker.take();
@@ -210,8 +231,10 @@ impl Capsule {
                 }
                 Event::ReceiverStatus(status) => {
                     if let Err(error) = &status {
-                        self.receive
-                            .interrupt_with_details("接收已中断，请重新发送".into(), error.clone());
+                        self.receive.interrupt_with_details(
+                            self.language.strings().receive_interrupted.into(),
+                            error.clone(),
+                        );
                     }
                     self.receiver_status = status;
                     changed = true;
@@ -226,12 +249,36 @@ impl Capsule {
                             self.download_directory = Some(directory);
                             self.settings_error = None;
                             if changed_directory {
-                                self.receiver_status = Err("正在更新接收目录…".into());
+                                self.receiver_status =
+                                    Err(self.language.strings().receiver_updating_dir.into());
                                 self.receiver.reload_directory();
                             }
                         }
                         Err(error) => {
-                            self.settings_error = Some(format!("保存接收目录失败：{error}"))
+                            self.settings_error = Some(format!(
+                                "{}{error}",
+                                self.language.strings().err_download_dir_save
+                            ))
+                        }
+                    }
+                    changed = true;
+                    continue;
+                }
+                Event::RadioChannelChanged(result) => {
+                    self.radio_channel_pending = None;
+                    self.receiver = crate::receiving::ReceiverHost::new(self.tx.clone());
+                    self.receiver.configure(
+                        self.model
+                            .connection_ready()
+                            .then(|| self.device_name.clone()),
+                    );
+                    match result {
+                        Ok(_) => self.settings_error = None,
+                        Err(error) => {
+                            self.settings_error = Some(format!(
+                                "{}{error}",
+                                self.language.strings().err_channel_change
+                            ));
                         }
                     }
                     changed = true;
@@ -264,7 +311,10 @@ impl Capsule {
                         && matches!(event, omdrop_core::ReceiverEvent::Received { .. })
                         && let (Some(shell), Some(message)) = (&self.shell, &self.receive.notice)
                     {
-                        shell.notify("文件已接收", &message.message);
+                        shell.notify(
+                            self.language.strings().notice_files_received,
+                            &message.message,
+                        );
                     }
                     changed |= applied;
                     continue;
@@ -280,7 +330,9 @@ impl Capsule {
                         (ready && !self.firmware.busy).then(|| self.device_name.clone()),
                     );
                     if !ready {
-                        changed |= self.receive.interrupt("无线连接中断，接收未完成".into());
+                        changed |= self
+                            .receive
+                            .interrupt(self.language.strings().connection_lost_receive.into());
                     }
                 }
                 _ => {}
@@ -315,7 +367,10 @@ impl Capsule {
                     match result {
                         Ok(Some(paths)) => self.accept_files(paths, window, cx),
                         Err(error) => {
-                            self.model.error = Some(format!("打开文件选择器失败：{error}"))
+                            self.model.error = Some(format!(
+                                "{}{error}",
+                                self.language.strings().err_file_picker
+                            ))
                         }
                         Ok(None) => {}
                     }
@@ -386,7 +441,7 @@ impl Capsule {
         {
             self.answer_incoming(false, cx);
             self.receive.show_notice(
-                "接收请求已结束，请重新发送",
+                self.language.strings().incoming_ended,
                 crate::receiving::NoticeKind::Info,
             );
             changed = true;
@@ -451,6 +506,7 @@ impl Capsule {
         }
         self.finish_name_edit(window);
         self.settings_open = false;
+        self.language_menu_open = false;
         self.expand(true, window, cx);
         let mut workers = std::mem::take(&mut self.workers);
         if let Some(worker) = self.firmware_worker.take() {
@@ -480,6 +536,7 @@ impl Capsule {
         }
         self.drop_hovered = false;
         self.settings_open = false;
+        self.language_menu_open = false;
         self.finish_name_edit(window);
         self.name_saved = false;
         self.visibility = if expanded {
@@ -514,7 +571,10 @@ impl Capsule {
                     self.opening_files = Some(self.model.selection_id);
                     self.model.error = None;
                 }
-                Err(error) => self.model.error = Some(format!("打开文件失败：{error}")),
+                Err(error) => {
+                    self.model.error =
+                        Some(format!("{}{error}", self.language.strings().err_open_file))
+                }
             }
             cx.notify();
         }
@@ -534,7 +594,10 @@ impl Capsule {
             && let Err(error) = shell.choose_files()
         {
             self.picker_open = false;
-            self.model.error = Some(format!("打开文件选择器失败：{error}"));
+            self.model.error = Some(format!(
+                "{}{error}",
+                self.language.strings().err_file_picker
+            ));
         }
         cx.notify();
     }
@@ -576,6 +639,47 @@ impl Capsule {
             && !self.receiver.has_active_transfers()
     }
 
+    fn can_change_radio_channel(&self, channel: u16) -> bool {
+        if self.radio_channel_pending.is_some()
+            || self.firmware.busy
+            || self.model.phase.busy()
+            || self.picker_open
+            || self.name_input.is_some()
+            || self.incoming.is_some()
+            || self.receive.active.is_some()
+            || self.receiver.has_active_transfers()
+        {
+            return false;
+        }
+        let Some(Ok(status)) = self.model.status.as_ref() else {
+            return false;
+        };
+        if status.channel == channel {
+            return false;
+        }
+        match channel {
+            6 => true,
+            44 | 149 => status.target.as_deref() == Some("esp32c5") && status.ready(),
+            _ => false,
+        }
+    }
+
+    fn set_radio_channel(&mut self, channel: u16, cx: &mut Context<Self>) {
+        if !self.can_change_radio_channel(channel) {
+            return;
+        }
+        self.radio_channel_pending = Some(channel);
+        self.settings_error = None;
+        self.receiver_status = Err(self.language.strings().switching_channel.into());
+        let receiver_worker = self.receiver.shutdown();
+        self.workers.push(backend::change_radio_channel(
+            channel,
+            receiver_worker,
+            self.tx.clone(),
+        ));
+        cx.notify();
+    }
+
     fn choose_download_directory(&mut self, cx: &mut Context<Self>) {
         if !self.can_change_download_directory() {
             return;
@@ -586,7 +690,12 @@ impl Capsule {
                     self.picker_open = true;
                     self.settings_error = None;
                 }
-                Err(error) => self.settings_error = Some(format!("{error:#}")),
+                Err(error) => {
+                    self.settings_error = Some(format!(
+                        "{}{error:#}",
+                        self.language.strings().err_receive_dir_picker
+                    ))
+                }
             }
         }
         cx.notify();
@@ -615,10 +724,7 @@ impl Capsule {
         match result {
             Ok(name) => {
                 if self.device_name != name {
-                    self.receiver_status = Err(
-                        "\u{6b63}\u{5728}\u{66f4}\u{65b0}\u{8bbe}\u{5907}\u{5e7f}\u{64ad}\u{2026}"
-                            .into(),
-                    );
+                    self.receiver_status = Err(self.language.strings().updating_broadcast.into());
                 }
                 self.device_name = name;
                 self.receiver.configure(
@@ -630,7 +736,13 @@ impl Capsule {
                 self.settings_error = None;
                 self.name_saved = true;
             }
-            Err(error) => self.settings_error = Some(format!("{error:#}")),
+            Err(error) => {
+                self.settings_error =
+                    Some(error.downcast_ref::<omdrop_host::NameError>().map_or_else(
+                        || format!("{}{error:#}", self.language.strings().err_saving_name),
+                        |kind| self.language.name_error(*kind),
+                    ))
+            }
         }
         cx.notify();
     }
@@ -644,6 +756,7 @@ impl Capsule {
             return;
         }
         self.settings_open = true;
+        self.language_menu_open = false;
         self.firmware.open = false;
         self.name_saved = false;
         self.focus.focus(window);
@@ -656,6 +769,7 @@ impl Capsule {
             cx.notify();
         } else if self.settings_open {
             self.settings_open = false;
+            self.language_menu_open = false;
             self.finish_name_edit(window);
             self.name_saved = false;
             self.focus.focus(window);
@@ -670,7 +784,7 @@ impl Capsule {
         }
         self.expand(true, window, cx);
         if self.firmware.busy || self.model.phase.busy() {
-            self.model.error = Some("正在操作设备，请完成或取消后再添加文件。".into());
+            self.model.error = Some(self.language.strings().busy_device_add_files.into());
             cx.notify();
             return;
         }
@@ -767,21 +881,23 @@ impl Capsule {
         cx.notify();
     }
     fn status_text(&self) -> (&'static str, u32) {
+        let text = self.language.strings();
         match &self.model.status {
-            Some(Ok(status)) if status.ready() => ("已连接", 0x30d158),
-            Some(Ok(_)) => ("等待无线桥接", 0xff9f0a),
-            Some(Err(_)) => ("后台服务未连接", 0xff9f0a),
-            None => ("正在连接", MUTED),
+            Some(Ok(status)) if status.ready() => (text.status_connected, 0x30d158),
+            Some(Ok(_)) => (text.status_waiting_bridge, 0xff9f0a),
+            Some(Err(_)) => (text.status_service_unavailable, 0xff9f0a),
+            None => (text.status_connecting, MUTED),
         }
     }
 
     fn pill(&self) -> AnyElement {
+        let text = self.language.strings();
         let subtitle = if self.model.phase.busy() {
-            self.model.phase.title()
+            self.model.phase.title(self.language)
         } else if self.model.phase == Phase::Complete {
-            "文件已送达"
+            text.pill_delivered
         } else {
-            "拖入文件即可发送"
+            text.pill_drop_to_send
         };
         div()
             .id("capsule")
@@ -821,6 +937,7 @@ impl Capsule {
     }
 
     fn exit_panel(&self, cx: &mut Context<Self>) -> AnyElement {
+        let text = self.language.strings();
         let error = match &self.exit_state {
             Some(ExitState::Failed(error)) => Some(error),
             _ => None,
@@ -841,19 +958,20 @@ impl Capsule {
                     .text_size(px(17.))
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(if error.is_some() {
-                        "后台服务未能停止"
+                        text.quit_failed_title
                     } else {
-                        "正在退出 Omdrop…"
+                        text.quitting_title
                     }),
             )
-            .child(div().text_size(px(13.)).text_color(rgb(MUTED)).child(
-                error.cloned().unwrap_or_else(|| {
-                    "正在结束本机任务并释放设备。其他客户端仍在使用时，后台会继续运行。".into()
-                }),
-            ))
+            .child(
+                div()
+                    .text_size(px(13.))
+                    .text_color(rgb(MUTED))
+                    .child(error.cloned().unwrap_or_else(|| text.quit_detail.into())),
+            )
             .when(error.is_some(), |panel| {
                 panel.child(
-                    button("retry-quit", "重试退出", true)
+                    button("retry-quit", text.retry_quit, true)
                         .on_click(cx.listener(|this, _, window, cx| this.quit(window, cx))),
                 )
             })
@@ -861,6 +979,7 @@ impl Capsule {
     }
 
     fn panel(&self, cx: &mut Context<Self>) -> AnyElement {
+        let text = self.language.strings();
         let (status, color) = self.status_text();
         let show_back = self.incoming.is_none()
             && (self.settings_open
@@ -924,7 +1043,7 @@ impl Capsule {
                                             .text_size(px(11.))
                                             .font_weight(FontWeight::MEDIUM)
                                             .text_color(rgb(MUTED))
-                                            .child("设备固件")
+                                            .child(text.firmware_title)
                                             .when(self.can_open_firmware(), |control| {
                                                 control.cursor_pointer().hover(|s| {
                                                     s.bg(rgb(0x393940)).text_color(rgb(INK))
@@ -1023,9 +1142,9 @@ impl Capsule {
                                         .child(back_chevron())
                                         .child(div().text_size(px(11.)).line_height(px(14.)).child(
                                             if self.settings_open || self.firmware.open {
-                                                "返回分享"
+                                                text.back_to_share
                                             } else {
-                                                "返回"
+                                                text.back
                                             },
                                         ))
                                         .hover(|s| s.bg(rgb(SURFACE)).text_color(rgb(INK)))
@@ -1051,9 +1170,9 @@ impl Capsule {
                                             .line_height(px(18.))
                                             .font_weight(FontWeight::MEDIUM)
                                             .child(if self.firmware.open {
-                                                "设备固件"
+                                                text.firmware_title
                                             } else {
-                                                "设置"
+                                                text.settings_title
                                             }),
                                     )
                                 }),
@@ -1100,6 +1219,8 @@ impl Capsule {
                                 color,
                                 expanded: notice.details_visible,
                                 copied: notice.copied,
+                                copy_label: text.copy,
+                                copied_label: text.copied,
                             },
                             cx.listener(move |this, hovered, _, cx| {
                                 if this.receive.set_notice_hovered(
@@ -1146,7 +1267,7 @@ impl Capsule {
                                 .text_center()
                                 .text_size(px(10.))
                                 .text_color(rgb(MUTED))
-                                .child("已拒绝接收"),
+                                .child(text.receiver_declined),
                         )
                     })
             })
@@ -1168,15 +1289,15 @@ impl Capsule {
                             .child(status),
                     )
                     .child(if self.name_input.is_some() {
-                        "Enter 保存 · Esc 取消"
+                        text.footer_save
                     } else if self.settings_open || self.firmware.open {
-                        "Esc  返回分享"
+                        text.footer_back
                     } else if self.picker_open {
-                        "正在选择文件…"
+                        text.footer_choosing
                     } else if self.model.validating {
-                        "正在读取文件信息…"
+                        text.footer_reading
                     } else {
-                        "Ctrl+O  选择文件"
+                        text.footer_choose
                     }),
             )
             .into_any_element()
@@ -1195,6 +1316,7 @@ impl Capsule {
         }
         self.finish_name_edit(window);
         self.settings_open = false;
+        self.language_menu_open = false;
         self.firmware.open = true;
         if !self.firmware.busy && !self.firmware.loading {
             self.firmware.loading = true;
@@ -1212,7 +1334,8 @@ impl Capsule {
         if !self.firmware.can_start(self.firmware_transfer_active()) {
             return;
         }
-        let paths = omdrop_flash::installed_manifest()
+        let board = self.firmware.package.as_ref().unwrap().board.clone();
+        let paths = omdrop_flash::installed_manifest_for_board(&board)
             .and_then(|manifest| Ok((manifest, omdrop_flash::installed_tool()?)));
         let (manifest_path, tool_path) = match paths {
             Ok(paths) => paths,
@@ -1234,7 +1357,7 @@ impl Capsule {
         self.firmware.progress = None;
         self.firmware.cancelling = false;
         self.firmware.error = None;
-        self.firmware.message = "正在停止空闲接收并申请设备维护…".into();
+        self.firmware.message = self.language.strings().firmware_prepare_maintenance.into();
         let cancel = omdrop_flash::Cancellation::default();
         self.firmware_cancel = Some(cancel.clone());
         let options = omdrop_flash::FlashOptions {
@@ -1254,6 +1377,7 @@ impl Capsule {
         cx.notify();
     }
     fn firmware_view(&self, cx: &mut Context<Self>) -> AnyElement {
+        let text = self.language.strings();
         let transfer_active = self.firmware_transfer_active();
         let can_start = self.firmware.can_start(transfer_active);
         let mut body = div()
@@ -1269,13 +1393,18 @@ impl Capsule {
                             .text_size(px(13.))
                             .font_weight(FontWeight::MEDIUM)
                             .child(self.firmware.package.as_ref().map_or_else(
-                                || "固件安装".to_string(),
-                                |package| package.board.clone(),
+                                || text.firmware_install.to_string(),
+                                |package| {
+                                    omdrop_flash::profile_for_board(&package.board).map_or_else(
+                                        || package.board.clone(),
+                                        |profile| profile.label.into(),
+                                    )
+                                },
                             )),
                     )
                     .child(firmware_hint(
                         self.firmware.package.as_ref().map_or_else(
-                            || "未找到可用的固件包".to_string(),
+                            || text.firmware_not_found.to_string(),
                             |package| {
                                 format!(
                                     "{} · {} MiB",
@@ -1287,13 +1416,60 @@ impl Capsule {
                         MUTED,
                     ))
                     .child(firmware_hint(
-                        format!(
-                            "固件包：{} · 设备版本：未知",
-                            self.firmware.version.as_deref().unwrap_or("未找到")
-                        ),
+                        self.language
+                            .firmware_package_version(self.firmware.version.as_deref()),
                         MUTED,
                     )),
             );
+        if self.firmware.packages.len() > 1 {
+            let mut profiles = div().flex().flex_wrap().gap(px(6.));
+            for (index, package) in self.firmware.packages.iter().enumerate() {
+                let board = package.board.clone();
+                let selected = self
+                    .firmware
+                    .package
+                    .as_ref()
+                    .is_some_and(|current| current.board == board);
+                let label = omdrop_flash::profile_for_board(&board)
+                    .map_or_else(|| board.clone(), |profile| profile.label.into());
+                profiles = profiles.child(
+                    div()
+                        .id(("firmware-profile", index))
+                        .h(px(32.))
+                        .px(px(10.))
+                        .rounded(px(7.))
+                        .border_1()
+                        .border_color(rgb(if selected { BLUE } else { 0x3a3a40 }))
+                        .bg(rgb(if selected { 0x163353 } else { 0x202024 }))
+                        .flex()
+                        .items_center()
+                        .text_size(px(10.))
+                        .text_color(rgb(if selected { INK } else { MUTED }))
+                        .child(label)
+                        .when(self.firmware.busy, |button| button.opacity(0.4))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if this.firmware.select_profile(&board) {
+                                cx.notify();
+                            }
+                        })),
+                );
+            }
+            body = body.child(
+                firmware_card().child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.))
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .child(text.firmware_target),
+                        )
+                        .child(profiles),
+                ),
+            );
+        }
         if self.firmware.confirm_exit && self.firmware.busy {
             body = body.child(
                 firmware_card()
@@ -1301,29 +1477,31 @@ impl Capsule {
                         div()
                             .text_size(px(12.))
                             .font_weight(FontWeight::MEDIUM)
-                            .child("停止安装并退出？"),
+                            .child(text.firmware_stop_quit),
                     )
-                    .child(firmware_hint(
-                        "正在写入固件。取消后可能需要完整重刷；退出会等待烧录进程停止并释放串口。",
-                        0xffb56b,
-                    )),
+                    .child(firmware_hint(text.firmware_stop_quit_detail, 0xffb56b)),
             );
             let actions = div()
                 .flex()
                 .gap(px(8.))
                 .child(div().flex_1().min_w_0().child(
-                    firmware_button("keep-flashing", "继续安装", true).on_click(cx.listener(
-                        |this, _, _, cx| {
+                    firmware_button("keep-flashing", text.firmware_keep_install, true).on_click(
+                        cx.listener(|this, _, _, cx| {
                             this.firmware.confirm_exit = false;
                             cx.notify();
-                        },
-                    )),
-                ))
-                .child(div().flex_1().min_w_0().child(
-                    firmware_button("cancel-flash-quit", "取消并退出", false).on_click(
-                        cx.listener(|this, _, window, cx| this.begin_quit(true, window, cx)),
+                        }),
                     ),
-                ));
+                ))
+                .child(
+                    div().flex_1().min_w_0().child(
+                        firmware_button("cancel-flash-quit", text.firmware_cancel_quit, false)
+                            .on_click(
+                                cx.listener(|this, _, window, cx| {
+                                    this.begin_quit(true, window, cx)
+                                }),
+                            ),
+                    ),
+                );
             return crate::share_layout::page_with_actions(
                 "firmware-page",
                 body.into_any_element(),
@@ -1369,16 +1547,15 @@ impl Capsule {
                         ),
                 );
             }
-            body = body.child(status).child(firmware_hint(
-                "写入期间请勿拔线。取消会停止烧录进程，可能需要完整重刷。",
-                0xffb56b,
-            ));
+            body = body
+                .child(status)
+                .child(firmware_hint(text.firmware_write_warning, 0xffb56b));
             let action = firmware_button(
                 "cancel-firmware",
                 if self.firmware.cancelling {
-                    "正在停止…"
+                    text.firmware_stopping
                 } else {
-                    "取消固件操作"
+                    text.firmware_cancel
                 },
                 false,
             )
@@ -1417,7 +1594,7 @@ impl Capsule {
                     div()
                         .text_size(px(12.))
                         .font_weight(FontWeight::MEDIUM)
-                        .child("连接设备"),
+                        .child(text.firmware_connect),
                 )
                 .child(
                     div()
@@ -1430,9 +1607,9 @@ impl Capsule {
                         .text_size(px(11.))
                         .text_color(rgb(BLUE))
                         .child(if self.firmware.loading {
-                            "检查中…"
+                            text.firmware_checking
                         } else {
-                            "刷新"
+                            text.firmware_refresh
                         })
                         .when(!self.firmware.loading, |button| {
                             button.cursor_pointer().hover(|s| s.bg(rgb(0x393940)))
@@ -1450,10 +1627,11 @@ impl Capsule {
         if self.firmware.devices.is_empty() {
             devices = devices.child(firmware_hint(
                 if self.firmware.loading {
-                    "正在查找设备和检查固件包…"
+                    text.firmware_searching
                 } else {
-                    "未发现串口。请使用数据线连接设备后刷新；必要时按住 G0 再点按 RST 进入下载模式。"
-                }, MUTED,
+                    text.firmware_no_port
+                },
+                MUTED,
             ));
         }
         for (index, device) in self.firmware.devices.iter().enumerate() {
@@ -1510,17 +1688,25 @@ impl Capsule {
             );
         }
         body = body.child(devices);
+        if self.firmware.selected.is_some()
+            && self.firmware.package.is_some()
+            && !self.firmware.profile_matches_selected_port(
+                self.firmware.package.as_ref().map(|p| p.board.as_str()),
+            )
+        {
+            body = body.child(firmware_hint(text.firmware_profile_mismatch, 0xffb56b));
+        }
         let upgrade = self.firmware.mode == omdrop_flash::InstallMode::Upgrade;
         let mut mode_buttons = div().flex().gap(px(6.));
         for (id, label, mode) in [
             (
                 "firmware-upgrade",
-                "保留设置更新",
+                text.firmware_keep_settings,
                 omdrop_flash::InstallMode::Upgrade,
             ),
             (
                 "firmware-reinstall",
-                "首次 / 重新安装",
+                text.firmware_reinstall,
                 omdrop_flash::InstallMode::Reinstall,
             ),
         ] {
@@ -1556,14 +1742,14 @@ impl Capsule {
                     div()
                         .text_size(px(12.))
                         .font_weight(FontWeight::MEDIUM)
-                        .child("安装选项"),
+                        .child(text.firmware_options),
                 )
                 .child(mode_buttons)
                 .child(firmware_hint(
                     if upgrade {
-                        "保留现有设置；需识别到 Omdrop 固件，且分区布局一致。"
+                        text.firmware_keep_hint
                     } else {
-                        "将替换原程序和分区布局，其他固件数据可能丢失。"
+                        text.firmware_replace_hint
                     },
                     if upgrade { MUTED } else { 0xffb56b },
                 ))
@@ -1608,7 +1794,7 @@ impl Capsule {
                                 .min_w_0()
                                 .text_size(px(11.))
                                 .whitespace_normal()
-                                .child("我已确认设备板型、芯片和 Flash 容量与上方固件包匹配"),
+                                .child(text.firmware_confirm_board),
                         )
                         .on_click(cx.listener(|this, _, _, cx| {
                             if !this.firmware.busy {
@@ -1617,22 +1803,19 @@ impl Capsule {
                             }
                         })),
                 )
-                .child(firmware_hint("芯片型号不能替代板型确认。", MUTED)),
+                .child(firmware_hint(text.firmware_chip_hint, MUTED)),
         );
         if transfer_active {
-            body = body.child(firmware_hint(
-                "正在传输文件，请先完成或取消传输。其他客户端占用设备时也无法安装。",
-                0xffb56b,
-            ));
+            body = body.child(firmware_hint(text.firmware_transfer_active, 0xffb56b));
         }
         let action = firmware_button(
             "install-firmware",
             if self.firmware.error.is_some() {
-                "重试安装"
+                text.firmware_retry
             } else if upgrade {
-                "开始更新"
+                text.firmware_start_update
             } else {
-                "开始安装"
+                text.firmware_start_install
             },
             true,
         )
@@ -1648,7 +1831,247 @@ impl Capsule {
         .into_any_element()
     }
 
+    fn radio_settings_view(&self, cx: &mut Context<Self>) -> AnyElement {
+        let text = self.language.strings();
+        let status = self
+            .model
+            .status
+            .as_ref()
+            .and_then(|status| status.as_ref().ok());
+        let channel = status.map(|status| status.channel);
+        let target = status.and_then(|status| status.target.as_deref());
+        let target_label = match target {
+            Some("esp32s3") => "ESP32-S3",
+            Some("esp32c5") => "ESP32-C5",
+            _ => text.radio_unknown_board,
+        };
+        let current_label = channel.map(|channel| match channel {
+            6 => text.channel_6,
+            44 => text.channel_44,
+            149 => text.channel_149,
+            _ => text.channel_unknown,
+        });
+        let status_text = match (status, current_label) {
+            (Some(status), Some(current)) if status.ready() => {
+                format!("{target_label} · {} {current}", text.radio_current)
+            }
+            (Some(_), Some(current)) => format!(
+                "{target_label} · {} {current} · {}",
+                text.radio_configured, text.radio_not_ready
+            ),
+            (Some(_), None) => {
+                format!("{target_label} · {}", text.radio_current_unknown)
+            }
+            _ => text.radio_reading.into(),
+        };
+        let choices: &[u16] = match target {
+            Some("esp32c5") => &[6, 44, 149],
+            Some("esp32s3") | None => &[6],
+            _ => &[6],
+        };
+        div()
+            .flex_shrink_0()
+            .rounded(px(16.))
+            .bg(rgb(SURFACE))
+            .p(px(16.))
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .child(div().text_size(px(13.)).child(text.radio_title))
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(rgb(MUTED))
+                    .child(status_text),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap(px(8.))
+                    .children(choices.iter().copied().map(|channel| {
+                        let selected = channel == status.map_or(0, |status| status.channel);
+                        let enabled = self.can_change_radio_channel(channel);
+                        let label = match channel {
+                            6 => text.channel_6,
+                            44 => text.channel_44,
+                            _ => text.channel_149,
+                        };
+                        div()
+                            .id(("radio-channel", channel as u32))
+                            .h(px(34.))
+                            .px(px(12.))
+                            .rounded(px(8.))
+                            .bg(rgb(if selected { BLUE } else { 0x393940 }))
+                            .flex()
+                            .items_center()
+                            .text_size(px(11.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(label)
+                            .when(!enabled, |button| {
+                                button
+                                    .opacity(if selected { 0.65 } else { 0.4 })
+                                    .cursor(CursorStyle::Arrow)
+                            })
+                            .when(enabled, |button| {
+                                button
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(rgb(0x484850)))
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.set_radio_channel(channel, cx)
+                            }))
+                    })),
+            )
+            .when(self.radio_channel_pending.is_some(), |view| {
+                view.child(
+                    div()
+                        .text_size(px(10.))
+                        .text_color(rgb(MUTED))
+                        .child(text.radio_restarting),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn language_settings_view(&self, cx: &mut Context<Self>) -> AnyElement {
+        let text = self.language.strings();
+        div()
+            .flex_shrink_0()
+            .rounded(px(16.))
+            .bg(rgb(SURFACE))
+            .p(px(16.))
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .child(div().text_size(px(13.)).child(text.language_title))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                        if this.language_menu_open {
+                            this.language_menu_open = false;
+                            cx.notify();
+                        }
+                    }))
+                    .child(
+                        div()
+                            .id("language-select")
+                            .h(px(36.))
+                            .w_full()
+                            .px(px(12.))
+                            .rounded(px(9.))
+                            .border_1()
+                            .border_color(rgb(if self.language_menu_open {
+                                BLUE
+                            } else {
+                                0x3a3a40
+                            }))
+                            .bg(rgb(0x202024))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .cursor_pointer()
+                            .text_size(px(12.))
+                            .hover(|style| style.bg(rgb(0x2a2a31)))
+                            .child(self.language.label())
+                            .child(dropdown_chevron(self.language_menu_open))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.language_menu_open = !this.language_menu_open;
+                                cx.notify();
+                            })),
+                    )
+                    .when(self.language_menu_open, |field| {
+                        field.child(
+                            div()
+                                .id("language-menu")
+                                .w_full()
+                                .max_h(px(240.))
+                                .overflow_y_scroll()
+                                .rounded(px(10.))
+                                .border_1()
+                                .border_color(rgba(0xffffff18))
+                                .bg(rgb(0x1c1c1f))
+                                .p(px(4.))
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.))
+                                .children(Language::ALL.into_iter().map(|language| {
+                                    let selected = self.language == language;
+                                    div()
+                                        .id(("language-option", language as u32))
+                                        .h(px(30.))
+                                        .px(px(8.))
+                                        .rounded(px(6.))
+                                        .bg(rgb(if selected { 0x163353 } else { 0x1c1c1f }))
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .cursor_pointer()
+                                        .text_size(px(11.))
+                                        .text_color(rgb(if selected { INK } else { MUTED }))
+                                        .hover(|style| style.bg(rgb(0x2f2f36)))
+                                        .child(language.label())
+                                        .when(selected, |row| {
+                                            row.child(div().text_color(rgb(BLUE)).child("✓"))
+                                        })
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.set_language(language, cx)
+                                        }))
+                                })),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .text_size(px(10.))
+                    .text_color(rgb(MUTED))
+                    .child(text.language_hint),
+            )
+            .into_any_element()
+    }
+
+    fn set_language(&mut self, language: Language, cx: &mut Context<Self>) {
+        self.language_menu_open = false;
+        if self.language == language {
+            cx.notify();
+            return;
+        }
+        let result = crate::settings::path()
+            .and_then(|path| crate::settings::save_language_to(&path, language.code()));
+        match result {
+            Ok(_) => {
+                self.language = language;
+                i18n::set_current(language);
+                self.settings_error = None;
+                if !self.firmware.busy {
+                    self.firmware.message = language.strings().firmware_idle.into();
+                }
+                if let Some(shell) = self.shell.as_mut() {
+                    shell.language_changed();
+                }
+                // Explorer text is installed in the registry and Send to shortcut.
+                let tx = self.tx.clone();
+                std::thread::spawn(move || {
+                    if let Err(error) = crate::integration::register() {
+                        let message =
+                            format!("{}{error:#}", i18n::current().strings().shell_menu_failed);
+                        let _ = tx.send(Event::ShellError(message));
+                    }
+                });
+            }
+            Err(error) => {
+                self.settings_error =
+                    Some(format!("{}{error:#}", language.strings().err_language_save));
+            }
+        }
+        cx.notify();
+    }
+
     fn settings_view(&self, cx: &mut Context<Self>) -> AnyElement {
+        let text = self.language.strings();
         div()
             .id("settings-page")
             .flex_1()
@@ -1657,6 +2080,8 @@ impl Capsule {
             .flex()
             .flex_col()
             .gap(px(12.))
+            .child(self.language_settings_view(cx))
+            .child(self.radio_settings_view(cx))
             .child(
                 div()
                     .flex_shrink_0()
@@ -1677,7 +2102,7 @@ impl Capsule {
                                 div()
                                     .text_size(px(12.))
                                     .text_color(rgb(MUTED))
-                                    .child("设备名称"),
+                                    .child(text.device_name),
                             )
                             .when(self.name_input.is_none(), |row| {
                                 row.child(
@@ -1690,7 +2115,7 @@ impl Capsule {
                                         .items_center()
                                         .text_size(px(11.))
                                         .text_color(rgb(BLUE))
-                                        .child("修改")
+                                        .child(text.change)
                                         .cursor_pointer()
                                         .hover(|s| s.bg(rgb(0x32323a)))
                                         .on_click(cx.listener(|this, _, window, cx| {
@@ -1719,7 +2144,7 @@ impl Capsule {
                             .text_size(px(11.))
                             .line_height(px(17.))
                             .text_color(rgb(MUTED))
-                            .child("附近设备会在隔空投送列表和发送请求中看到这个名称。"),
+                            .child(text.device_name_hint),
                     )
                     .when_some(self.name_input.as_ref(), |card, input| {
                         let length = input.read(cx).text().chars().count();
@@ -1738,9 +2163,9 @@ impl Capsule {
                                                 MUTED
                                             },
                                         ))
-                                        .child(format!(
-                                            "{length} / {} 字符",
-                                            crate::settings::MAX_NAME_CHARS
+                                        .child(self.language.name_char_count(
+                                            length,
+                                            crate::settings::MAX_NAME_CHARS,
                                         )),
                                 )
                                 .child(
@@ -1758,7 +2183,7 @@ impl Capsule {
                                                 .items_center()
                                                 .text_size(px(11.))
                                                 .cursor_pointer()
-                                                .child("取消")
+                                                .child(text.cancel)
                                                 .hover(|s| s.bg(rgb(0x484850)))
                                                 .on_click(cx.listener(|this, _, window, cx| {
                                                     this.cancel_name(window, cx)
@@ -1776,7 +2201,7 @@ impl Capsule {
                                                 .text_size(px(11.))
                                                 .font_weight(FontWeight::MEDIUM)
                                                 .cursor_pointer()
-                                                .child("保存")
+                                                .child(text.save)
                                                 .hover(|s| s.bg(rgb(0x2995ff)))
                                                 .on_click(cx.listener(|this, _, window, cx| {
                                                     this.save_name(window, cx)
@@ -1789,9 +2214,9 @@ impl Capsule {
             .when(self.name_saved, |view| {
                 view.child(div().text_size(px(11.)).text_color(rgb(0x30d158)).child(
                     if self.receiver_status.is_ok() {
-                        "已保存，设备广播名称已更新"
+                        text.name_saved_broadcast
                     } else {
-                        "已保存，等待设备广播更新"
+                        text.name_saved_waiting
                     },
                 ))
             })
@@ -1809,10 +2234,10 @@ impl Capsule {
                     .flex()
                     .flex_col()
                     .gap(px(8.))
-                    .child(div().text_size(px(13.)).child("接收 AirDrop"))
+                    .child(div().text_size(px(13.)).child(text.receive_airdrop))
                     .child(div().text_size(px(11.)).text_color(rgb(MUTED)).child(
                         match &self.receiver_status {
-                            Ok(()) => "已开启，附近设备可发现此电脑".to_owned(),
+                            Ok(()) => text.receiver_enabled.to_owned(),
                             Err(error) => error.clone(),
                         },
                     ))
@@ -1820,9 +2245,9 @@ impl Capsule {
                         div()
                             .text_size(px(10.))
                             .text_color(rgb(MUTED))
-                            .child("收到文件时需确认接受。关闭窗口后仍可接收。"),
+                            .child(text.receiver_requires_confirm),
                     )
-                    .child(div().text_size(px(11.)).child("接收文件保存到"))
+                    .child(div().text_size(px(11.)).child(text.save_files_to))
                     .child(
                         div()
                             .text_size(px(11.))
@@ -1832,16 +2257,16 @@ impl Capsule {
                                 self.download_directory
                                     .as_ref()
                                     .map(|path| path.display().to_string())
-                                    .unwrap_or_else(|| "目录不可用，请重新选择".into()),
+                                    .unwrap_or_else(|| text.folder_unavailable.into()),
                             ),
                     )
                     .child(
                         button(
                             "choose-download-directory",
                             if self.picker_open {
-                                "选择 / 保存中…"
+                                text.choosing_saving
                             } else {
-                                "更改保存目录"
+                                text.change_folder
                             },
                             false,
                         )
@@ -1855,7 +2280,7 @@ impl Capsule {
                             div()
                                 .text_size(px(10.))
                                 .text_color(rgb(MUTED))
-                                .child("接收完成后可更改目录"),
+                                .child(text.folder_change_after_receive),
                         )
                     }),
             )
@@ -1880,7 +2305,7 @@ impl Capsule {
                 self.receiver_declined_until = Some(Instant::now() + Duration::from_secs(3));
             } else {
                 self.receive.show_notice(
-                    "接收请求已结束，请重新发送",
+                    self.language.strings().incoming_ended,
                     crate::receiving::NoticeKind::Info,
                 );
             }
@@ -1890,16 +2315,21 @@ impl Capsule {
 
     fn receiving_view(&self, compact: bool) -> AnyElement {
         use crate::receiving::Phase as ReceivePhase;
+        let text = self.language.strings();
         let transfer = self.receive.active.as_ref().unwrap();
         let (title, detail, fraction) = match transfer.phase {
-            ReceivePhase::Waiting => ("等待发送方开始传输", "已接受，请保持设备靠近".into(), None),
+            ReceivePhase::Waiting => (
+                text.receive_waiting_title,
+                text.receive_waiting_detail.into(),
+                None,
+            ),
             ReceivePhase::Receiving {
                 received,
                 total: Some(total),
             } if total > 0 => {
                 let fraction = (received as f64 / total as f64).clamp(0., 1.) as f32;
                 (
-                    "正在接收",
+                    text.receiving_title,
                     format!(
                         "{} / {} · {:.0}%",
                         file_size(received),
@@ -1909,12 +2339,14 @@ impl Capsule {
                     Some(fraction),
                 )
             }
-            ReceivePhase::Receiving { received, .. } => {
-                ("正在接收", format!("已接收 {}", file_size(received)), None)
-            }
+            ReceivePhase::Receiving { received, .. } => (
+                text.receiving_title,
+                self.language.received_size(&file_size(received)),
+                None,
+            ),
             ReceivePhase::Confirming => (
-                "正在完成接收",
-                "正在保存文件并向发送方确认".into(),
+                text.receive_confirming_title,
+                text.receive_confirming_detail.into(),
                 Some(1.),
             ),
         };
@@ -1973,7 +2405,10 @@ impl Capsule {
                     .text_size(px(12.))
                     .text_color(rgb(MUTED))
                     .whitespace_normal()
-                    .child(format!("{} · {} 个文件", transfer.sender, transfer.files)),
+                    .child(
+                        self.language
+                            .transfer_files(&transfer.sender, transfer.files),
+                    ),
             )
             .child(
                 div()
@@ -1997,13 +2432,17 @@ impl Capsule {
                         .text_size(px(10.))
                         .text_color(rgb(MUTED))
                         .whitespace_normal()
-                        .child(format!("保存到 {}", transfer.save_dir.display())),
+                        .child(
+                            self.language
+                                .saved_to(&transfer.save_dir.display().to_string()),
+                        ),
                 )
             })
             .into_any_element()
     }
 
     fn incoming_view(&self, cx: &mut Context<Self>) -> AnyElement {
+        let text = self.language.strings();
         let request = self.incoming.as_ref().unwrap();
         div()
             .flex_1()
@@ -2016,13 +2455,14 @@ impl Capsule {
                 div()
                     .text_size(px(24.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child("接收文件"),
+                    .child(text.receive_files_title),
             )
-            .child(div().text_size(px(13.)).whitespace_normal().child(format!(
-                "{} 想向你发送 {} 个文件",
-                request.transfer.sender_name,
-                request.transfer.files.len()
-            )))
+            .child(
+                div().text_size(px(13.)).whitespace_normal().child(
+                    self.language
+                        .incoming_ask(&request.transfer.sender_name, request.transfer.files.len()),
+                ),
+            )
             .child(
                 div()
                     .id("incoming-files")
@@ -2042,14 +2482,17 @@ impl Capsule {
                     .text_size(px(10.))
                     .text_color(rgb(MUTED))
                     .whitespace_normal()
-                    .child(format!("接受后保存到 {}", request.save_dir.display())),
+                    .child(
+                        self.language
+                            .accepted_save_to(&request.save_dir.display().to_string()),
+                    ),
             )
             .child(
-                button("accept-incoming", "接受", true)
+                button("accept-incoming", text.accept, true)
                     .on_click(cx.listener(|this, _, _, cx| this.answer_incoming(true, cx))),
             )
             .child(
-                button("decline-incoming", "拒绝", true)
+                button("decline-incoming", text.decline, true)
                     .bg(rgb(SURFACE))
                     .on_click(cx.listener(|this, _, _, cx| this.answer_incoming(false, cx))),
             )
@@ -2057,6 +2500,7 @@ impl Capsule {
     }
 
     fn empty_view(&self, cx: &mut Context<Self>) -> AnyElement {
+        let text = self.language.strings();
         let illustration = div()
             .my_auto()
             .w_full()
@@ -2072,7 +2516,7 @@ impl Capsule {
                     .text_size(px(23.))
                     .line_height(px(30.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child("轻轻一拖，即刻分享"),
+                    .child(text.share_tagline),
             )
             .child(
                 div()
@@ -2081,7 +2525,7 @@ impl Capsule {
                     .line_height(px(20.))
                     .text_color(rgb(MUTED))
                     .text_center()
-                    .child("将文件拖到这里\n发送到附近的 iPhone 或 Mac"),
+                    .child(text.share_hint),
             )
             .children(
                 self.model
@@ -2092,11 +2536,11 @@ impl Capsule {
         let action = button(
             "choose",
             if self.picker_open {
-                "正在打开文件选择器…"
+                text.opening_picker
             } else if self.model.validating {
-                "正在读取文件信息…"
+                text.footer_reading
             } else {
-                "选择文件"
+                text.choose_files
             },
             !self.picker_open && !self.model.validating,
         )
@@ -2153,7 +2597,7 @@ impl Capsule {
         }
         // A recognizable document badge is present immediately, including
         // when the associated shell extension cannot produce an icon.
-        let (label, color) = kind.badge();
+        let (label, color) = kind.badge(self.language);
         tile.bg(rgb(color))
             .child(
                 div()
@@ -2181,6 +2625,7 @@ impl Capsule {
     }
 
     fn files_view(&self, cx: &mut Context<Self>) -> AnyElement {
+        let text = self.language.strings();
         let title = if self.model.files.len() == 1 {
             self.model.files[0]
                 .file_name()
@@ -2188,7 +2633,7 @@ impl Capsule {
                 .to_string_lossy()
                 .into_owned()
         } else {
-            format!("{} 个文件", self.model.files.len())
+            self.language.file_count(self.model.files.len())
         };
         let mut devices = div()
             .id("devices")
@@ -2211,18 +2656,18 @@ impl Capsule {
                     .text_size(px(12.))
                     .child(
                         if self.model.status.is_some() && !self.model.connection_ready() {
-                            "无线连接尚未就绪"
+                            text.connection_not_ready
                         } else if self.model.scanning {
-                            "正在寻找附近设备…"
+                            text.scanning
                         } else {
-                            "暂未发现可接收的设备"
+                            text.no_receivers
                         },
                     )
                     .child(div().text_size(px(10.)).text_center().child(
                         if self.model.status.is_some() && !self.model.connection_ready() {
-                            "连接恢复后会自动搜索附近设备"
+                            text.reconnect_search
                         } else {
-                            "请让设备保持唤醒，并开启 AirDrop 接收"
+                            text.device_awake_hint
                         },
                     )),
             );
@@ -2357,11 +2802,11 @@ impl Capsule {
                                                         button.cursor_pointer()
                                                     })
                                                     .child(if self.opening_files.is_some() {
-                                                        "打开中…"
+                                                        text.open_in_progress
                                                     } else if self.model.files.len() > 1 {
-                                                        "全部打开"
+                                                        text.open_all
                                                     } else {
-                                                        "打开文件"
+                                                        text.open_file
                                                     })
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.open_files(cx)
@@ -2373,11 +2818,11 @@ impl Capsule {
                                                     .cursor_pointer()
                                                     .text_color(rgb(BLUE))
                                                     .child(if self.picker_open {
-                                                        "选择中…"
+                                                        text.selecting
                                                     } else if self.model.validating {
-                                                        "读取中…"
+                                                        text.reading_short
                                                     } else {
-                                                        "更换文件"
+                                                        text.replace_files
                                                     })
                                                     .on_click(cx.listener(
                                                         |this, _, window, cx| {
@@ -2395,7 +2840,7 @@ impl Capsule {
                     .justify_between()
                     .text_size(px(11.))
                     .text_color(rgb(MUTED))
-                    .child("发送到附近设备")
+                    .child(text.send_to_nearby)
                     .child(
                         div()
                             .id("refresh")
@@ -2403,12 +2848,12 @@ impl Capsule {
                             .text_color(rgb(BLUE))
                             .child(if self.model.scanning {
                                 if self.model.peers.is_empty() {
-                                    "搜索中…"
+                                    text.searching
                                 } else {
-                                    "搜索其他设备…"
+                                    text.searching_more
                                 }
                             } else {
-                                "重新搜索"
+                                text.search_again
                             })
                             .on_click(cx.listener(|this, _, _, cx| this.scan(cx))),
                     ),
@@ -2424,9 +2869,9 @@ impl Capsule {
                 button(
                     "send",
                     if self.model.selected.is_some() {
-                        "发送"
+                        text.send
                     } else {
-                        "选择一台设备"
+                        text.choose_device
                     },
                     self.model.can_send(),
                 )
@@ -2436,18 +2881,19 @@ impl Capsule {
     }
 
     fn transfer_view(&self, cx: &mut Context<Self>) -> AnyElement {
+        let text = self.language.strings();
         let complete = self.model.phase == Phase::Complete;
         let declined = self.model.phase == Phase::Declined;
         let subtitle = match self.model.phase {
-            Phase::Preparing => "正在整理文件",
-            Phase::Waiting => "请在接收设备上轻点「接受」",
-            Phase::Confirming => "文件已上传，正在等待对方确认",
-            Phase::Complete => "文件已被接收设备确认",
-            Phase::Cancelled => "本次传输已停止",
-            Phase::Declined => "接收方拒绝了本次传输\n文件已保留，可返回重新选择设备",
-            Phase::Cancelling => "正在关闭传输连接",
-            Phase::Failed => "文件已保留，可以重新尝试",
-            _ => "请保持设备靠近",
+            Phase::Preparing => text.transfer_preparing,
+            Phase::Waiting => text.transfer_waiting,
+            Phase::Confirming => text.transfer_confirming,
+            Phase::Complete => text.transfer_complete,
+            Phase::Cancelled => text.transfer_cancelled,
+            Phase::Declined => text.transfer_declined,
+            Phase::Cancelling => text.transfer_cancelling,
+            Phase::Failed => text.transfer_failed,
+            _ => text.transfer_keep_near,
         };
         let mut view = div()
             .flex_1()
@@ -2491,7 +2937,7 @@ impl Capsule {
                 div()
                     .text_size(px(22.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child(self.model.phase.title()),
+                    .child(self.model.phase.title(self.language)),
             )
             .child(
                 div()
@@ -2550,9 +2996,9 @@ impl Capsule {
                 button(
                     "cancel",
                     if self.model.phase == Phase::Cancelling {
-                        "正在取消…"
+                        text.cancelling
                     } else {
-                        "取消发送"
+                        text.cancel_send
                     },
                     false,
                 )
@@ -2566,18 +3012,26 @@ impl Capsule {
             );
         } else {
             view = view.child(
-                button("done", if complete { "完成" } else { "返回" }, true)
-                    .w_full()
-                    .mt(px(12.))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        if this.model.phase == Phase::Complete {
-                            this.reset(window, cx);
-                        } else {
-                            this.model.phase = Phase::Ready;
-                            this.model.error = None;
-                            cx.notify();
-                        }
-                    })),
+                button(
+                    "done",
+                    if complete {
+                        text.done
+                    } else {
+                        text.back_action
+                    },
+                    true,
+                )
+                .w_full()
+                .mt(px(12.))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    if this.model.phase == Phase::Complete {
+                        this.reset(window, cx);
+                    } else {
+                        this.model.phase = Phase::Ready;
+                        this.model.error = None;
+                        cx.notify();
+                    }
+                })),
             );
         }
         view.into_any_element()
@@ -2622,7 +3076,7 @@ impl Render for Capsule {
         div()
             .id("root")
             .size_full()
-            .font_family("Segoe UI")
+            .font_family(self.language.font_family())
             .text_color(rgb(INK))
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
@@ -2631,6 +3085,11 @@ impl Render for Capsule {
                 }
                 if event.keystroke.modifiers.control && event.keystroke.key == "q" {
                     this.quit(window, cx);
+                    return;
+                }
+                if this.language_menu_open && event.keystroke.key == "escape" {
+                    this.language_menu_open = false;
+                    cx.notify();
                     return;
                 }
                 if this.name_input.is_some() {
@@ -2699,6 +3158,24 @@ fn settings_gear() -> impl IntoElement {
         },
     )
     .size(px(16.))
+    .flex_shrink_0()
+}
+
+fn dropdown_chevron(open: bool) -> impl IntoElement {
+    canvas(
+        move |_, _, _| (),
+        move |bounds, _, window, _| {
+            let mut path = PathBuilder::stroke(px(1.25));
+            let (start_y, middle_y, end_y) = if open { (6., 3., 6.) } else { (2., 5., 2.) };
+            path.move_to(bounds.origin + point(px(2.), px(start_y)));
+            path.line_to(bounds.origin + point(px(5.), px(middle_y)));
+            path.line_to(bounds.origin + point(px(8.), px(end_y)));
+            if let Ok(path) = path.build() {
+                window.paint_path(path, window.text_style().color);
+            }
+        },
+    )
+    .size(px(10.))
     .flex_shrink_0()
 }
 

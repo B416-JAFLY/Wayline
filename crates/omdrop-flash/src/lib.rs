@@ -1,10 +1,12 @@
 //! Firmware installation shared by desktop and CLI. No shell, automatic download or erase-all.
 mod package;
 mod process;
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 pub use package::{
-    FLASH_SIZE, Image, ImageKind, Manifest, SUPPORTED_BOARD, TOOL_VERSION, ValidatedPackage,
-    installed_manifest, installed_tool, validate_package,
+    BoardProfile, C5_FLASH_SIZE, C5_UART_BOARD, C5_USB_BOARD, FLASH_SIZE, FirmwareLink, Image,
+    ImageKind, Manifest, S3_UART_BOARD, S3_USB_BOARD, SUPPORTED_BOARD, TOOL_VERSION,
+    ValidatedPackage, installed_manifest, installed_manifest_for_board, installed_manifests,
+    installed_tool, profile_accepts_usb, profile_for_board, supported_profiles, validate_package,
 };
 use serde::Serialize;
 use std::{
@@ -89,23 +91,26 @@ pub struct FlashOptions {
 pub struct Device {
     pub port: String,
     pub label: String,
+    pub usb_vid: u16,
+    pub usb_pid: u16,
 }
 pub fn enumerate_devices() -> Result<Vec<Device>> {
     let mut ports: Vec<_> = serialport::available_ports()?
         .into_iter()
         .filter_map(|port| {
-            if let serialport::SerialPortType::UsbPort(info) = port.port_type {
-                // ESP native USB Serial/JTAG VID/PID identifies a candidate, never the board model.
-                if info.vid == 0x303a && info.pid == 0x1001 {
-                    return Some(Device {
-                        label: format!(
-                            "{} ({})",
-                            port.port_name,
-                            info.product.as_deref().unwrap_or("ESP USB Serial/JTAG")
-                        ),
-                        port: port.port_name,
-                    });
-                }
+            if let serialport::SerialPortType::UsbPort(info) = port.port_type
+                && supported_usb_adapter(info.vid, info.pid)
+            {
+                return Some(Device {
+                    label: format!(
+                        "{} ({})",
+                        port.port_name,
+                        info.product.as_deref().unwrap_or("USB serial adapter")
+                    ),
+                    port: port.port_name,
+                    usb_vid: info.vid,
+                    usb_pid: info.pid,
+                });
             }
             None
         })
@@ -114,12 +119,33 @@ pub fn enumerate_devices() -> Result<Vec<Device>> {
     Ok(ports)
 }
 
+fn supported_usb_adapter(vid: u16, pid: u16) -> bool {
+    (vid == 0x303a && pid == 0x1001) || [0x1a86, 0x10c4, 0x0403].contains(&vid)
+}
+
 pub fn flash(
     options: &FlashOptions,
     cancel: &Cancellation,
     event: impl FnMut(FlashEvent),
 ) -> std::result::Result<FlashReport, FlashError> {
     flash_with(options, cancel, event, &mut Production::default())
+}
+
+fn validate_profile_port(board: &str, port: &str) -> Result<()> {
+    let _ = profile_for_board(board).context("未支持的固件 profile")?;
+    let device = serialport::available_ports()?
+        .into_iter()
+        .find(|device| device.port_name.eq_ignore_ascii_case(port))
+        .with_context(|| format!("未找到串口 {port}"))?;
+    let serialport::SerialPortType::UsbPort(info) = device.port_type else {
+        bail!("串口 {port} 不是受支持的 USB 连接");
+    };
+    ensure!(
+        profile_accepts_usb(board, info.vid, info.pid),
+        "串口 USB 接口类型与固件 profile {} 不匹配",
+        profile_for_board(board).unwrap().label
+    );
+    Ok(())
 }
 
 fn flash_with(
@@ -140,12 +166,13 @@ fn flash_with(
     let result = (|| -> Result<FlashReport> {
         emit(stage, None, "正在校验固件包");
         ensure!(!cancel.is_cancelled(), "操作已取消");
-        ensure!(
-            options.board == SUPPORTED_BOARD,
-            "必须明确选择 Cardputer Adv 开发板"
-        );
         validate_port(&options.port)?;
         let package = validate_package(&options.manifest_path)?;
+        ensure!(
+            options.board == package.manifest.board,
+            "所选固件 profile 与清单不匹配"
+        );
+        runtime.validate_link(&package.manifest.board, &options.port)?;
         ensure!(
             options.tool_path.is_absolute() && options.tool_path.is_file(),
             "烧录工具必须是已安装的绝对文件路径"
@@ -189,21 +216,24 @@ fn flash_with(
                     .boot(
                         &options.port,
                         package.manifest.protocol_version,
+                        &package.manifest.chip,
                         cancel,
                         Duration::from_secs(3),
                     )
                     .context("无法识别现有项目固件；请明确选择重新安装")?;
             }
-            let mut args = base_args(&options.port, "no-reset");
+            let mut args = base_args(&package.manifest.chip, &options.port, "no-reset");
             args.push("flash-id".into());
-            let info = runtime.tool(
-                &options.tool_path,
-                &args,
-                cancel,
-                Duration::from_secs(30),
-                |line| emit(stage, None, line),
-            )?;
-            check_chip(&info.text)?;
+            let info = runtime
+                .tool(
+                    &options.tool_path,
+                    &args,
+                    cancel,
+                    Duration::from_secs(30),
+                    |line| emit(stage, None, line),
+                )
+                .map_err(|error| explain_wrong_chip(error, &package.manifest.chip))?;
+            check_chip(&info.text, &package.manifest)?;
             if options.mode == InstallMode::Upgrade {
                 let index = package
                     .manifest
@@ -213,7 +243,7 @@ fn flash_with(
                     .unwrap();
                 let table = &package.manifest.images[index];
                 let existing = staging.path().join("existing-partition-table.bin");
-                let mut args = base_args(&options.port, "no-reset");
+                let mut args = base_args(&package.manifest.chip, &options.port, "no-reset");
                 args.extend([
                     "read-flash".into(),
                     format!("0x{:x}", table.offset).into(),
@@ -240,7 +270,7 @@ fn flash_with(
             // A later service startup must not seize an incompletely written device.
             runtime.prepare_write()?;
             written = true;
-            let mut args = base_args(&options.port, "no-reset");
+            let mut args = base_args(&package.manifest.chip, &options.port, "no-reset");
             args.extend([
                 "write-flash".into(),
                 "--flash-mode".into(),
@@ -260,7 +290,7 @@ fn flash_with(
             )?;
             stage = FlashStage::Verify;
             emit(stage, None, "正在校验 Flash 中的镜像");
-            let mut args = base_args(&options.port, "hard-reset");
+            let mut args = base_args(&package.manifest.chip, &options.port, "hard-reset");
             args.push("verify-flash".into());
             append_images(&mut args, &package);
             runtime.tool(
@@ -276,6 +306,7 @@ fn flash_with(
                 .boot(
                     &options.port,
                     package.manifest.protocol_version,
+                    &package.manifest.chip,
                     cancel,
                     Duration::from_secs(20),
                 )
@@ -332,10 +363,14 @@ trait Runtime {
         timeout: Duration,
         output: impl FnMut(&str),
     ) -> Result<process::ToolOutput>;
+    fn validate_link(&mut self, _board: &str, _port: &str) -> Result<()> {
+        Ok(())
+    }
     fn boot(
         &mut self,
         port: &str,
         protocol: u8,
+        target: &str,
         cancel: &Cancellation,
         timeout: Duration,
     ) -> Result<()>;
@@ -348,6 +383,9 @@ struct Production {
     device: Option<omdrop_service::device_lock::DeviceGuard>,
 }
 impl Runtime for Production {
+    fn validate_link(&mut self, board: &str, port: &str) -> Result<()> {
+        validate_profile_port(board, port)
+    }
     fn acquire(&mut self, port: &str, cancel: &Cancellation) -> Result<()> {
         self.maintenance = Some(Maintenance::acquire(cancel)?);
         #[cfg(windows)]
@@ -406,10 +444,11 @@ impl Runtime for Production {
         &mut self,
         port: &str,
         protocol: u8,
+        target: &str,
         cancel: &Cancellation,
         timeout: Duration,
     ) -> Result<()> {
-        check_boot(port, protocol, cancel, timeout)
+        check_boot(port, protocol, target, cancel, timeout)
     }
 }
 fn validate_port(port: &str) -> Result<()> {
@@ -425,13 +464,12 @@ fn validate_port(port: &str) -> Result<()> {
     );
     Ok(())
 }
-fn base_args(port: &str, after: &str) -> Vec<OsString> {
-    // The pinned stub stops after the first read block on this native USB
-    // Serial/JTAG target. ESP32-S3 ROM supports read, write and MD5 verification;
-    // use it consistently and explicitly reset into it for each invocation.
+fn base_args(chip: &str, port: &str, after: &str) -> Vec<OsString> {
+    // Use the target chip's ROM for all profiles and explicitly reset before
+    // each operation so S3 and C5 use the same verified workflow.
     [
         "--chip",
-        "esp32s3",
+        chip,
         "--port",
         port,
         "--baud",
@@ -452,16 +490,43 @@ fn append_images(args: &mut Vec<OsString>, package: &ValidatedPackage) {
         args.push(path.as_os_str().to_owned());
     }
 }
-fn check_chip(text: &str) -> Result<()> {
+fn chip_label(chip: &str) -> Result<&'static str> {
+    match chip {
+        "esp32s3" => Ok("ESP32-S3"),
+        "esp32c5" => Ok("ESP32-C5"),
+        _ => bail!("不支持的芯片目标：{chip}"),
+    }
+}
+
+fn check_chip(text: &str, manifest: &Manifest) -> Result<()> {
+    let expected_chip = chip_label(&manifest.chip)?;
+    let expected_flash_size = format!("{}MB", manifest.flash_size / (1024 * 1024));
     ensure!(
-        text.contains("ESP32-S3")
-            && text
-                .lines()
-                .any(|line| line.contains("Detected flash size:")
-                    && (line.contains("8MB") || line.contains("8 MB"))),
-        "设备不是受支持的 ESP32-S3 / 8 MiB Flash"
+        text.contains(expected_chip)
+            && text.lines().any(|line| {
+                line.contains("Detected flash size:")
+                    && line.replace(' ', "").contains(&expected_flash_size)
+            }),
+        "芯片或 Flash 容量与所选固件 profile 不匹配；期望 {expected_chip} / {expected_flash_size}"
     );
     Ok(())
+}
+
+fn explain_wrong_chip(error: anyhow::Error, expected: &str) -> anyhow::Error {
+    let details = error.to_string();
+    let expected_label = chip_label(expected).unwrap_or("所选芯片");
+    let wrong_chip = match expected {
+        "esp32s3" => details.contains("This chip is ESP32-C5"),
+        "esp32c5" => details.contains("This chip is ESP32-S3"),
+        _ => false,
+    };
+    if wrong_chip {
+        anyhow::anyhow!(
+            "检测到的芯片与所选 {expected_label} 固件 profile 不匹配；尚未写入 Flash。esptool 详情：{details}"
+        )
+    } else {
+        error
+    }
 }
 fn progress(line: &str) -> Option<u8> {
     let at = line.find('%')?;
@@ -473,7 +538,13 @@ fn progress(line: &str) -> Option<u8> {
         .ok()?;
     (value.is_finite() && (0.0..=100.0).contains(&value)).then_some(value as u8)
 }
-fn check_boot(port: &str, protocol: u8, cancel: &Cancellation, timeout: Duration) -> Result<()> {
+fn check_boot(
+    port: &str,
+    protocol: u8,
+    target: &str,
+    cancel: &Cancellation,
+    timeout: Duration,
+) -> Result<()> {
     let start = Instant::now();
     let mut last = "设备未响应".to_owned();
     while start.elapsed() < timeout {
@@ -482,7 +553,7 @@ fn check_boot(port: &str, protocol: u8, cancel: &Cancellation, timeout: Duration
             Ok(mut radio) => match radio.hello(Duration::from_millis(500)) {
                 Ok(hello) => {
                     ensure!(
-                        hello.target == "esp32s3" && hello.protocol == protocol,
+                        hello.target == target && hello.protocol == protocol,
                         "设备启动了不兼容的无线固件"
                     );
                     return Ok(());
@@ -596,11 +667,13 @@ mod tests {
         prepared: bool,
         restored: Option<bool>,
         fail_command: Option<&'static str>,
+        chip_error: Option<&'static str>,
         wrong_chip: bool,
         fail_boot: bool,
         fail_restore: bool,
         cancel_write: bool,
         table: Vec<u8>,
+        boot_target: Option<String>,
     }
     impl Runtime for Simulated {
         fn acquire(&mut self, _: &str, _: &Cancellation) -> Result<()> {
@@ -642,6 +715,9 @@ mod tests {
                 .unwrap();
             self.commands.push(command.into());
             self.arguments.push(args.to_vec());
+            if let ("flash-id", Some(error)) = (command, self.chip_error) {
+                return Err(anyhow::anyhow!("烧录工具退出 exit code:2：{error}"));
+            }
             ensure!(
                 self.fail_command != Some(command),
                 "simulated {command} failure"
@@ -656,28 +732,51 @@ mod tests {
             if command == "write-flash" {
                 output("Writing 100%");
             }
+            let chip = args
+                .windows(2)
+                .find(|pair| pair[0] == "--chip")
+                .and_then(|pair| pair[1].to_str())
+                .unwrap_or("esp32s3");
             Ok(process::ToolOutput {
                 text: match command {
                     "version" => TOOL_VERSION.into(),
                     "flash-id" => format!(
-                        "Chip is {}\nDetected flash size: 8MB",
+                        "Chip is {}\nDetected flash size: {}",
                         if self.wrong_chip {
                             "ESP32-C3"
+                        } else if chip == "esp32c5" {
+                            "ESP32-C5"
                         } else {
                             "ESP32-S3"
-                        }
+                        },
+                        if chip == "esp32c5" { "2MB" } else { "8MB" }
                     ),
                     _ => String::new(),
                 },
             })
         }
-        fn boot(&mut self, _: &str, _: u8, _: &Cancellation, _: Duration) -> Result<()> {
+        fn boot(
+            &mut self,
+            _: &str,
+            _: u8,
+            target: &str,
+            _: &Cancellation,
+            _: Duration,
+        ) -> Result<()> {
+            self.boot_target = Some(target.into());
             ensure!(!self.fail_boot, "simulated boot timeout");
             Ok(())
         }
     }
     fn operation_fixture() -> (tempfile::TempDir, FlashOptions, Simulated) {
         let (dir, path, manifest) = package::tests::fixture();
+        operation_fixture_for(dir, path, manifest)
+    }
+    fn operation_fixture_for(
+        dir: tempfile::TempDir,
+        path: PathBuf,
+        manifest: Manifest,
+    ) -> (tempfile::TempDir, FlashOptions, Simulated) {
         let simulation = Simulated {
             table: std::fs::read(dir.path().join(&manifest.images[1].path)).unwrap(),
             ..Default::default()
@@ -686,7 +785,7 @@ mod tests {
             manifest_path: path,
             tool_path: std::env::current_exe().unwrap(),
             port: "COM4".into(),
-            board: SUPPORTED_BOARD.into(),
+            board: manifest.board.clone(),
             mode: InstallMode::Reinstall,
         };
         (dir, options, simulation)
@@ -711,6 +810,37 @@ mod tests {
         assert_eq!(simulation.restored, Some(true));
         assert_eq!(stages.last(), Some(&FlashStage::Restore));
         assert!(stages.contains(&FlashStage::CheckBoot));
+        assert_eq!(simulation.boot_target.as_deref(), Some("esp32s3"));
+    }
+    #[test]
+    fn c5_profile_flashes_with_c5_chip_and_waits_for_c5_hello() {
+        let (dir, path, manifest) = package::tests::c5_fixture(C5_UART_BOARD);
+        let (_dir, options, mut simulation) = operation_fixture_for(dir, path, manifest);
+        let report =
+            flash_with(&options, &Cancellation::default(), |_| {}, &mut simulation).unwrap();
+        assert!(report.images_written && report.device_ready);
+        assert_eq!(simulation.boot_target.as_deref(), Some("esp32c5"));
+        assert_eq!(simulation.restored, Some(true));
+        for args in simulation
+            .arguments
+            .iter()
+            .filter(|args| !args.iter().any(|arg| arg == "version"))
+        {
+            assert!(
+                args.windows(2)
+                    .any(|pair| pair[0] == "--chip" && pair[1] == "esp32c5")
+            );
+        }
+    }
+    #[test]
+    fn requested_profile_must_match_manifest_before_maintenance_or_write() {
+        let (dir, path, manifest) = package::tests::c5_fixture(C5_UART_BOARD);
+        let (_dir, mut options, mut simulation) = operation_fixture_for(dir, path, manifest);
+        options.board = SUPPORTED_BOARD.into();
+        let error =
+            flash_with(&options, &Cancellation::default(), |_| {}, &mut simulation).unwrap_err();
+        assert_eq!(error.stage, FlashStage::ValidatePackage);
+        assert!(!simulation.acquired && !simulation.prepared);
     }
     #[test]
     fn tool_failure_preserves_phase_and_failed_maintenance() {
@@ -748,6 +878,25 @@ mod tests {
         assert!(error.possibly_written);
         assert_eq!(simulation.restored, Some(false));
         assert!(error.message.contains("镜像已写入并校验"));
+    }
+
+    #[test]
+    fn mismatched_chip_is_explained_without_writing() {
+        let (_dir, options, mut simulation) = operation_fixture();
+        simulation.chip_error = Some(
+            "A fatal error occurred: This chip is ESP32-C5, not ESP32-S3. Wrong chip argument?",
+        );
+        let error =
+            flash_with(&options, &Cancellation::default(), |_| {}, &mut simulation).unwrap_err();
+        assert_eq!(error.stage, FlashStage::Connect);
+        assert!(!error.possibly_written);
+        assert!(!simulation.prepared);
+        assert!(
+            error
+                .message
+                .contains("与所选 ESP32-S3 固件 profile 不匹配")
+        );
+        assert!(error.message.contains("尚未写入 Flash"));
     }
     #[test]
     fn cancel_and_recovery_failure_never_report_completion() {
@@ -819,13 +968,27 @@ mod tests {
     }
     #[test]
     fn chip_capacity_and_port_are_explicit() {
-        assert!(check_chip("Chip is ESP32-S3\nDetected flash size: 8MB").is_ok());
-        assert!(check_chip("Chip is ESP32\nDetected flash size: 8MB").is_err());
-        assert!(check_chip("Chip is ESP32-S3\nDetected flash size: 4MB").is_err());
+        let (_, _, s3) = package::tests::fixture();
+        let (_, _, c5) = package::tests::c5_fixture(C5_UART_BOARD);
+        assert!(check_chip("Chip is ESP32-S3\nDetected flash size: 8MB", &s3).is_ok());
+        assert!(check_chip("Chip is ESP32\nDetected flash size: 8MB", &s3).is_err());
+        assert!(check_chip("Chip is ESP32-S3\nDetected flash size: 4MB", &s3).is_err());
+        assert!(check_chip("Chip is ESP32-C5\nDetected flash size: 2MB", &c5).is_ok());
+        assert!(check_chip("Chip is ESP32-C5\nDetected flash size: 4MB", &c5).is_err());
         for port in ["auto", "COM0", "COM4 --erase-all", "\\\\.\\COM4"] {
             assert!(validate_port(port).is_err());
         }
         assert!(validate_port("COM4").is_ok());
+    }
+
+    #[test]
+    fn desktop_device_filter_includes_common_c5_usb_uart_adapters() {
+        assert!(supported_usb_adapter(0x303a, 0x1001));
+        assert!(supported_usb_adapter(0x1a86, 0x7523));
+        assert!(supported_usb_adapter(0x10c4, 0xea60));
+        assert!(supported_usb_adapter(0x0403, 0x6001));
+        assert!(!supported_usb_adapter(0x303a, 0x1002));
+        assert!(!supported_usb_adapter(0x1234, 0x5678));
     }
     #[test]
     fn recognizes_progress_without_promising_completion() {

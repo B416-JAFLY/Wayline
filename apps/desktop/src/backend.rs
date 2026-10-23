@@ -22,6 +22,8 @@ use std::{
 pub struct LinkStatus {
     pub state: String,
     pub port: Option<String>,
+    pub channel: u16,
+    pub target: Option<String>,
     pub awdl0: bool,
     pub error: Option<String>,
 }
@@ -30,6 +32,8 @@ impl From<Status> for LinkStatus {
         Self {
             state: status.state,
             port: status.port,
+            channel: status.channel,
+            target: status.target,
             awdl0: status.awdl0,
             error: status.error,
         }
@@ -52,9 +56,11 @@ pub enum Event {
     ReceiverStatus(Result<(), String>),
     ReceiverActivity(omdrop_core::ReceiverEvent),
     DownloadDirectorySaved(Result<PathBuf, String>),
+    RadioChannelChanged(Result<Status, String>),
     Incoming(crate::receiving::IncomingRequest),
     ShutdownDone(Result<bool, String>),
     Firmware(crate::firmware::Event),
+    ShellError(String),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -74,12 +80,14 @@ impl From<anyhow::Error> for SendFailure {
         {
             Some(omdrop_core::TransferFailureKind::Declined) => Self::Declined,
             Some(omdrop_core::TransferFailureKind::Cancelled) => Self::Cancelled,
-            Some(omdrop_core::TransferFailureKind::Connection) => {
-                Self::Connection(format!("连接中断：{error:#}"))
-            }
-            Some(omdrop_core::TransferFailureKind::Validation) => {
-                Self::Validation(format!("数据校验失败：{error:#}"))
-            }
+            Some(omdrop_core::TransferFailureKind::Connection) => Self::Connection(format!(
+                "{}{error:#}",
+                crate::i18n::current().strings().err_send_connection
+            )),
+            Some(omdrop_core::TransferFailureKind::Validation) => Self::Validation(format!(
+                "{}{error:#}",
+                crate::i18n::current().strings().err_send_validation
+            )),
             _ => Self::Failed(format!("{error:#}")),
         }
     }
@@ -144,18 +152,19 @@ pub fn monitor(tx: Sender<Event>) -> Monitor {
         while !worker_stop.load(Ordering::Acquire) {
             if lease.as_ref().is_some_and(|lease| !lease.is_alive()) {
                 lease.take();
-                let _ = tx.send(Event::Status(
-                    Err("后台服务会话已断开，正在重新连接".into()),
-                ));
+                let _ = tx.send(Event::Status(Err(crate::i18n::current()
+                    .strings()
+                    .backend_session_lost
+                    .into())));
             }
             let status = (|| -> Result<LinkStatus> {
+                let text = crate::i18n::current().strings();
                 if lease.is_none() {
-                    omdrop_service::service_control::start()
-                        .context("无法启动后台服务，请检查安装及服务权限")?;
+                    omdrop_service::service_control::start().context(text.backend_start_failed)?;
                     lease = Some(
                         Client::default()
                             .acquire(SessionKind::Client)
-                            .context("无法登记使用会话，请更新 Omdrop 后台服务")?,
+                            .context(text.backend_lease_failed)?,
                     );
                 }
                 Ok(client.status()?.into())
@@ -170,9 +179,12 @@ pub fn monitor(tx: Sender<Event>) -> Monitor {
             std::thread::park_timeout(Duration::from_secs(3));
         }
         match lease {
-            Some(lease) => lease
-                .release()
-                .map_err(|error| format!("释放后台会话失败：{error}")),
+            Some(lease) => lease.release().map_err(|error| {
+                format!(
+                    "{}{error}",
+                    crate::i18n::current().strings().backend_release_failed
+                )
+            }),
             None => settle_service_session(),
         }
     });
@@ -180,6 +192,32 @@ pub fn monitor(tx: Sender<Event>) -> Monitor {
         stop,
         worker: Some(worker),
     }
+}
+
+pub fn change_radio_channel(
+    channel: u16,
+    receiver: Option<JoinHandle<()>>,
+    tx: Sender<Event>,
+) -> JoinHandle<()> {
+    std::thread::spawn(move || {
+        let result = receiver
+            .map(|worker| {
+                worker.join().map_err(|_| {
+                    crate::i18n::current()
+                        .strings()
+                        .receiver_worker_crashed
+                        .to_owned()
+                })
+            })
+            .transpose()
+            .map(|_| ())
+            .and_then(|()| {
+                Client::default()
+                    .set_channel_and_wait(channel, Duration::from_secs(45))
+                    .map_err(|error| format!("{error}"))
+            });
+        let _ = tx.send(Event::RadioChannelChanged(result));
+    })
 }
 
 pub fn shutdown(
@@ -203,7 +241,12 @@ pub fn shutdown(
                 .map(|worker| {
                     worker
                         .join()
-                        .map_err(|_| "后台会话线程意外退出".to_owned())
+                        .map_err(|_| {
+                            crate::i18n::current()
+                                .strings()
+                                .backend_worker_crashed
+                                .to_owned()
+                        })
                         .and_then(|result| result)
                         .map(|outcome| outcome.remaining_clients > 0 || !outcome.service_stopping)
                 })
@@ -231,7 +274,12 @@ fn settle_service_session() -> Result<ReleaseOutcome, String> {
         match omdrop_service::service_control::status() {
             Ok(ServiceState::Stopped) => break,
             Err(error) if error.raw_os_error() == Some(1060) => break,
-            Err(error) => return Err(format!("无法确认后台服务状态：{error}")),
+            Err(error) => {
+                return Err(format!(
+                    "{}{error}",
+                    crate::i18n::current().strings().backend_status_failed
+                ));
+            }
             Ok(ServiceState::Running) => {
                 match client
                     .acquire(SessionKind::Client)
@@ -243,13 +291,21 @@ fn settle_service_session() -> Result<ReleaseOutcome, String> {
                             error.kind(),
                             ClientErrorKind::Stopping | ClientErrorKind::Connect
                         ) => {}
-                    Err(error) => return Err(format!("无法释放后台会话，请稍后重试：{error}")),
+                    Err(error) => {
+                        return Err(format!(
+                            "{}{error}",
+                            crate::i18n::current().strings().backend_release_retry
+                        ));
+                    }
                 }
             }
             Ok(_) => {}
         }
         if Instant::now() >= deadline {
-            return Err("后台服务仍在切换状态，尚未确认设备已释放，请重试退出".into());
+            return Err(crate::i18n::current()
+                .strings()
+                .backend_release_pending
+                .into());
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -313,12 +369,13 @@ pub(super) fn prepare_network() -> Result<()> {
     // firewall updates. Keep our requests from racing each other.
     static GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _guard = GATE.lock().unwrap_or_else(|error| error.into_inner());
+    let text = crate::i18n::current().strings();
     let status: LinkStatus = Client::default()
         .firewall(&std::env::current_exe()?)
-        .context("网络配置失败，请检查 Omdrop 后台服务")?
+        .context(text.network_config_failed)?
         .into();
     if !status.ready() {
-        bail!("无线桥接尚未就绪，请检查 ESP32 连接");
+        bail!(text.bridge_not_ready);
     }
     Ok(())
 }

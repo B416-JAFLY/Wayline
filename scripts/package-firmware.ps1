@@ -14,8 +14,21 @@ $flash = Get-Content -LiteralPath (Join-Path $build 'flasher_args.json') -Raw | 
 if ($record.formatVersion -ne 1 -or $record.argumentsSha256 -ine (Get-FileHash -LiteralPath (Join-Path $build 'flasher_args.json') -Algorithm SHA256).Hash) {
     throw 'The flash arguments do not belong to the recorded successful build.'
 }
-if ($record.target -ne 'esp32s3' -or $record.flashSize -ne '8MB') {
-    throw 'Only the validated ESP32-S3 / 8 MiB Cardputer Adv image can be packaged for desktop installation.'
+$sdkconfigPath = Join-Path $build 'sdkconfig'
+if (-not $record.sdkconfigSha256 -or $record.sdkconfigSha256 -ine (Get-FileHash -LiteralPath $sdkconfigPath -Algorithm SHA256).Hash) {
+    throw 'The sdkconfig does not belong to the recorded successful build.'
+}
+$profile = switch ($record.profile) {
+    'cardputer-adv' { [ordered]@{ board='cardputer-adv'; chip='esp32s3'; flashSize='8MB'; flashBytes=8388608L; bootloaderOffset=0L; tableOffset=32768L; appOffset=65536L } }
+    'esp32s3-uart0' { [ordered]@{ board='esp32s3-uart0'; chip='esp32s3'; flashSize='8MB'; flashBytes=8388608L; bootloaderOffset=0L; tableOffset=32768L; appOffset=65536L } }
+    'esp32s3-native-usb' { [ordered]@{ board='esp32s3-native-usb'; chip='esp32s3'; flashSize='8MB'; flashBytes=8388608L; bootloaderOffset=0L; tableOffset=32768L; appOffset=65536L } }
+    'esp32c5-uart0' { [ordered]@{ board='esp32c5-uart0'; chip='esp32c5'; flashSize='2MB'; flashBytes=2097152L; bootloaderOffset=8192L; tableOffset=32768L; appOffset=65536L } }
+    'esp32c5-native-usb' { [ordered]@{ board='esp32c5-native-usb'; chip='esp32c5'; flashSize='2MB'; flashBytes=2097152L; bootloaderOffset=8192L; tableOffset=32768L; appOffset=65536L } }
+    default { throw "Unsupported firmware build profile: $($record.profile)" }
+}
+if ($record.target -ne $profile.chip -or $record.flashSize -ne $profile.flashSize -or
+    $flash.flash_settings.flash_size -ne $profile.flashSize -or $flash.extra_esptool_args.chip -ne $profile.chip) {
+    throw 'Firmware build target, flash size and recorded profile do not match.'
 }
 if (@($record.images).Count -ne 3 -or @($flash.flash_files.PSObject.Properties).Count -ne 3) { throw 'Expected bootloader, partition table and application only.' }
 $images = @()
@@ -25,8 +38,11 @@ foreach ($entry in $record.images | Sort-Object offset) {
     if ((Get-Item -LiteralPath $path).Length -ne $entry.length -or
         (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ine $entry.sha256) { throw "Image changed after build: $($entry.path)" }
     $offset = [long]$entry.offset
-    if ($offset -lt $end -or $entry.length -le 0 -or ($offset + $entry.length) -gt 8388608) { throw 'Invalid or overlapping firmware image ranges.' }
-    $kind = switch ($offset) { 0 { 'bootloader' } 32768 { 'partition-table' } 65536 { 'application' } default { throw 'Unsupported firmware partition layout.' } }
+    if ($offset -lt $end -or $entry.length -le 0 -or ($offset + $entry.length) -gt $profile.flashBytes) { throw 'Invalid or overlapping firmware image ranges.' }
+    if ($offset -eq $profile.bootloaderOffset) { $kind = 'bootloader' }
+    elseif ($offset -eq $profile.tableOffset) { $kind = 'partition-table' }
+    elseif ($offset -eq $profile.appOffset) { $kind = 'application' }
+    else { throw 'Unsupported firmware partition layout.' }
     # Bootloader/table must never overwrite the NVS partition beginning at 0x9000.
     if (($kind -eq 'bootloader' -and $offset + $entry.length -gt 32768) -or
         ($kind -eq 'partition-table' -and $offset + $entry.length -gt 36864)) { throw 'Firmware image overlaps reserved data.' }
@@ -40,7 +56,7 @@ foreach ($entry in $images) {
     $entry.Remove('source')
 }
 $table = $images | Where-Object kind -eq 'partition-table'
-$manifest = [ordered]@{ formatVersion = 1; board = 'cardputer-adv'; chip = 'esp32s3'; flashSize = 8388608; firmwareVersion = $record.firmwareVersion; sourceRevision = $record.sourceRevision; protocolVersion = 2; idfVersion = '6.0'; layoutId = $table.sha256; toolVersion = '5.0.2'; images = $images }
+$manifest = [ordered]@{ formatVersion = 1; board = $profile.board; chip = $profile.chip; flashSize = $profile.flashBytes; firmwareVersion = $record.firmwareVersion; sourceRevision = $record.sourceRevision; protocolVersion = 2; idfVersion = '6.0'; layoutId = $table.sha256; toolVersion = '5.0.2'; images = $images }
 [IO.File]::WriteAllText((Join-Path $OutputDirectory 'manifest.json'), ($manifest | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
 $null = Test-FirmwarePackage $OutputDirectory
 Write-Host "Firmware package: $OutputDirectory"

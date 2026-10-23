@@ -9,6 +9,8 @@ mod file_drop;
 #[cfg(windows)]
 mod firmware;
 #[cfg(windows)]
+mod i18n;
+#[cfg(windows)]
 mod integration;
 #[cfg(windows)]
 mod model;

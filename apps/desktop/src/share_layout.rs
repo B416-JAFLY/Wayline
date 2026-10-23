@@ -39,6 +39,8 @@ pub struct NoticeContent {
     pub color: u32,
     pub expanded: bool,
     pub copied: bool,
+    pub copy_label: &'static str,
+    pub copied_label: &'static str,
 }
 
 pub fn notice_banner(
@@ -111,9 +113,9 @@ pub fn notice_banner(
                         .text_color(rgb(if content.copied { 0x30d158 } else { 0xa0a0a8 }))
                         .hover(|style| style.bg(rgb(0x38383d)))
                         .child(if content.copied {
-                            "已复制"
+                            content.copied_label
                         } else {
-                            "复制"
+                            content.copy_label
                         })
                         .on_click(on_copy),
                 )

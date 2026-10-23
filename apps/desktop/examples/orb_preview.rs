@@ -278,6 +278,8 @@ impl Render for OrbPreview {
                         color: 0xff9f0a,
                         expanded: self.notice_expanded,
                         copied: self.notice_copied,
+                        copy_label: "复制",
+                        copied_label: "已复制",
                     },
                     cx.listener(|this, hovered, _, cx| {
                         this.hover_notice(false, *hovered, cx);

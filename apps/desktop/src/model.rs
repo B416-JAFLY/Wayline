@@ -1,4 +1,7 @@
-use crate::backend::{Event, LinkStatus, SendFailure};
+use crate::{
+    backend::{Event, LinkStatus, SendFailure},
+    i18n::{self, Language},
+};
 use omdrop_core::{DiscoveryEvent, NearbyReceiver, SendEvent};
 use std::path::PathBuf;
 
@@ -47,18 +50,19 @@ impl Phase {
                 | Self::Cancelling
         )
     }
-    pub fn title(&self) -> &'static str {
+    pub fn title(&self, language: Language) -> &'static str {
+        let text = language.strings();
         match self {
-            Self::Ready => "发送文件",
-            Self::Preparing => "正在准备",
-            Self::Waiting => "等待对方接受",
-            Self::Uploading { .. } => "正在发送",
-            Self::Confirming => "等待接收确认",
-            Self::Complete => "已送达",
-            Self::Cancelling => "正在取消",
-            Self::Cancelled => "已取消",
-            Self::Declined => "对方已拒绝",
-            Self::Failed => "暂时无法发送",
+            Self::Ready => text.phase_ready,
+            Self::Preparing => text.phase_preparing,
+            Self::Waiting => text.phase_waiting,
+            Self::Uploading { .. } => text.phase_uploading,
+            Self::Confirming => text.phase_confirming,
+            Self::Complete => text.phase_complete,
+            Self::Cancelling => text.phase_cancelling,
+            Self::Cancelled => text.phase_cancelled,
+            Self::Declined => text.phase_declined,
+            Self::Failed => text.phase_failed,
         }
     }
 }
@@ -94,7 +98,12 @@ impl Model {
                         self.phase = Phase::Ready;
                         self.error = None;
                     }
-                    Err(error) => self.error = Some(format!("无法选择文件：{error}")),
+                    Err(error) => {
+                        self.error = Some(format!(
+                            "{}{error}",
+                            i18n::current().strings().err_select_files
+                        ))
+                    }
                 }
             }
             Event::FilePreview(id, index, image) if id == self.selection_id => {
@@ -291,6 +300,8 @@ mod tests {
             status: Some(Ok(crate::backend::LinkStatus {
                 state: "running".into(),
                 port: None,
+                channel: 6,
+                target: Some("esp32c5".into()),
                 awdl0: true,
                 error: None,
             })),
@@ -609,7 +620,7 @@ mod tests {
         model.error = Some("earlier diagnostic".into());
         assert!(model.apply(Event::SendDone(1, Err(SendFailure::Declined))));
         assert_eq!(model.phase, Phase::Declined);
-        assert_eq!(model.phase.title(), "对方已拒绝");
+        assert_eq!(model.phase.title(Language::ZhCn), "对方已拒绝");
         assert!(!model.phase.busy());
         assert!(model.error.is_none());
         assert_eq!(model.files, vec![PathBuf::from("photo.png")]);

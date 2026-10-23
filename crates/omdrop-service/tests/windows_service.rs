@@ -214,6 +214,7 @@ mod checks {
 
     pub async fn run() {
         let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("radio-target.txt"), b"esp32c5").unwrap();
         let config_path = dir.path().join("config.json");
         let config = Config {
             port: "COM123".into(),
@@ -294,7 +295,39 @@ mod checks {
         assert_eq!(fs::read(&config_path).unwrap(), before);
         assert_eq!(starts(dir.path()).len(), 1);
 
-        request(&pipe, json!({"cmd":"set","port":"com124","channel":44})).await;
+        fs::write(dir.path().join("radio-target.txt"), b"esp32c5").unwrap();
+        let target_deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if request(&pipe, json!({"cmd":"status"}))
+                .await
+                .target
+                .as_deref()
+                == Some("esp32c5")
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < target_deadline,
+                "board target was not reported"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let receive_lease =
+            omdrop_service::client::Client::new(omdrop_service::client::ClientConfig {
+                pipe_name: pipe.clone(),
+                ..Default::default()
+            })
+            .unwrap()
+            .acquire_async(omdrop_service::session::SessionKind::Receive)
+            .await
+            .unwrap();
+        let busy = request(&pipe, json!({"cmd":"set","channel":6})).await;
+        assert!(busy
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("busy")));
+        receive_lease.finish_maintenance_async(false).await.unwrap();
+        request(&pipe, json!({"cmd":"set","port":"com124","channel":6})).await;
         let second = started(dir.path(), 2).await;
         assert_exited(&first);
         assert!(dir
@@ -302,12 +335,12 @@ mod checks {
             .join(format!("stopped-{}", first["pid"]))
             .exists());
         assert_eq!(second["args"][1], "COM124");
-        assert_eq!(second["args"][3], "44");
+        assert_eq!(second["args"][3], "6");
         assert_ne!(first["event"], second["event"]);
 
         // Controlled crash on the next start, then recover after the retry delay.
         fs::write(dir.path().join("crash"), b"42").unwrap();
-        request(&pipe, json!({"cmd":"set","channel":6})).await;
+        request(&pipe, json!({"cmd":"set","port":"com125","channel":6})).await;
         let crashed = started(dir.path(), 3).await;
         state(&pipe, "error").await;
         assert_exited(&crashed);
@@ -382,7 +415,7 @@ mod checks {
             panic!("restart initialization failed: {:?}", restarted.await);
         }
         let seventh = started(dir.path(), 7).await;
-        assert_eq!(seventh["args"][1], "COM124");
+        assert_eq!(seventh["args"][1], "COM125");
         stop_again.send_replace(true);
         tokio::time::timeout(Duration::from_secs(3), restarted)
             .await
@@ -412,6 +445,7 @@ mod checks {
         let mut backend = WindowsBackend {
             data_dir: dir.path().to_owned(),
             default_bridge: dir.path().join("omdrop-bridge.exe"),
+            target_file: dir.path().join("radio-target.txt"),
         };
         let mut child = backend.spawn(&config, &config.port).unwrap();
         let start = started(dir.path(), 1).await;

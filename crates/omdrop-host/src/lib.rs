@@ -15,6 +15,25 @@ use std::{
 
 pub const MAX_NAME_CHARS: usize = 64;
 const MAX_SETTINGS_BYTES: u64 = 64 * 1024;
+const MAX_LANGUAGE_CODE_CHARS: usize = 16;
+
+/// Structured name validation failures let localized front ends present their own text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameError {
+    ControlCharacter,
+    Empty,
+    TooLong,
+}
+impl std::fmt::Display for NameError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::ControlCharacter => "名称不能包含换行或控制字符",
+            Self::Empty => "请输入设备名称",
+            Self::TooLong => "名称最多可输入 64 个字符",
+        })
+    }
+}
+impl std::error::Error for NameError {}
 
 pub fn identity_dir() -> Result<PathBuf> {
     Ok(
@@ -32,16 +51,16 @@ pub fn default_name() -> String {
         .unwrap_or_else(|| "Windows PC".into())
 }
 pub fn normalize_name(name: &str) -> Result<String> {
-    ensure!(
-        !name.chars().any(char::is_control),
-        "名称不能包含换行或控制字符"
-    );
+    if name.chars().any(char::is_control) {
+        return Err(NameError::ControlCharacter.into());
+    }
     let name = name.trim();
-    ensure!(!name.is_empty(), "请输入设备名称");
-    ensure!(
-        name.chars().count() <= MAX_NAME_CHARS,
-        "名称最多可输入 64 个字符"
-    );
+    if name.is_empty() {
+        return Err(NameError::Empty.into());
+    }
+    if name.chars().count() > MAX_NAME_CHARS {
+        return Err(NameError::TooLong.into());
+    }
     Ok(name.into())
 }
 pub fn load_name() -> Result<String> {
@@ -71,6 +90,50 @@ pub fn save_name_to(path: &Path, name: &str) -> Result<String> {
     settings.insert("device_name".into(), Value::String(name.clone()));
     write_settings(path, &settings)?;
     Ok(name)
+}
+
+/// The desktop UI language is stored beside the other shared preferences.
+/// `None` means the user has not chosen a language and the system default applies.
+pub fn load_language() -> Result<Option<String>> {
+    load_language_from(&settings_path()?)
+}
+
+pub fn load_language_from(path: &Path) -> Result<Option<String>> {
+    let settings = read_settings(path)?;
+    match settings.get("language") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(language)) => normalize_language(language).map(Some),
+        _ => bail!("界面语言设置格式不正确"),
+    }
+}
+
+pub fn save_language(language: &str) -> Result<String> {
+    save_language_to(&settings_path()?, language)
+}
+
+pub fn save_language_to(path: &Path, language: &str) -> Result<String> {
+    let language = normalize_language(language)?;
+    let _guard = FileGuard::acquire(&path.with_extension("lock"))?;
+    let mut settings = read_settings(path)?;
+    settings.insert("language".into(), Value::String(language.clone()));
+    write_settings(path, &settings)?;
+    Ok(language)
+}
+
+fn normalize_language(language: &str) -> Result<String> {
+    let language = language.trim();
+    ensure!(!language.is_empty(), "界面语言代码不能为空");
+    ensure!(
+        language.chars().count() <= MAX_LANGUAGE_CODE_CHARS,
+        "界面语言代码过长"
+    );
+    ensure!(
+        language
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_')),
+        "界面语言代码格式不正确"
+    );
+    Ok(language.into())
 }
 
 /// Resolve the shared receive destination without creating directories or probe files.
@@ -371,15 +434,37 @@ mod tests {
     fn names_preserve_unicode_and_reject_controls() {
         assert_eq!(normalize_name("  工作电脑 🦉 ").unwrap(), "工作电脑 🦉");
         assert!(normalize_name(&"中".repeat(64)).is_ok());
-        for name in [
-            "".into(),
-            "   ".into(),
-            "a\nb".into(),
-            "\ta".into(),
-            "中".repeat(65),
+        for (name, kind) in [
+            (String::new(), NameError::Empty),
+            ("   ".into(), NameError::Empty),
+            ("a\nb".into(), NameError::ControlCharacter),
+            ("\ta".into(), NameError::ControlCharacter),
+            ("中".repeat(65), NameError::TooLong),
         ] {
-            assert!(normalize_name(&name).is_err());
+            let error = normalize_name(&name).unwrap_err();
+            assert_eq!(error.downcast_ref::<NameError>(), Some(&kind));
         }
+    }
+    #[test]
+    fn language_preference_preserves_other_settings_and_rejects_invalid_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("desktop.json");
+        assert_eq!(load_language_from(&path).unwrap(), None);
+        fs::write(&path, br#"{"device_name":"PC","future":{"x":1}}"#).unwrap();
+        save_language_to(&path, " zh-TW ").unwrap();
+        assert_eq!(load_language_from(&path).unwrap().as_deref(), Some("zh-TW"));
+        assert_eq!(load_name_from(&path, "fallback").unwrap(), "PC");
+        assert_eq!(read_settings(&path).unwrap()["future"]["x"], 1);
+        for invalid in [
+            b"{\"language\":false}".as_slice(),
+            b"{\"language\":\"\"}",
+            b"{\"language\":\"zh CN\"}",
+            b"{\"language\":\"zh-CN-very-long-code\"}",
+        ] {
+            fs::write(&path, invalid).unwrap();
+            assert!(load_language_from(&path).is_err());
+        }
+        assert!(save_language_to(&path, "").is_err());
     }
     #[test]
     fn saves_preserve_unknown_settings_and_corruption() {

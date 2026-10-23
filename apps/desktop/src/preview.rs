@@ -49,7 +49,8 @@ impl FileKind {
             _ => Self::Other,
         }
     }
-    pub fn badge(self) -> (&'static str, u32) {
+    pub fn badge(self, language: crate::i18n::Language) -> (&'static str, u32) {
+        let text = language.strings();
         match self {
             Self::Image => ("IMG", 0x4186be),
             Self::Text => ("TXT", 0x65778b),
@@ -58,8 +59,8 @@ impl FileKind {
             Self::PowerPoint => ("P", 0xc45131),
             Self::Pdf => ("PDF", 0xbd4145),
             Self::Archive => ("ZIP", 0x9e762c),
-            Self::Audio => ("音频", 0x9959aa),
-            Self::Video => ("视频", 0x7462b7),
+            Self::Audio => (text.badge_audio, 0x9959aa),
+            Self::Video => (text.badge_video, 0x7462b7),
             Self::Other => ("FILE", 0x65778b),
         }
     }

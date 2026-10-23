@@ -9,9 +9,112 @@ use std::{
 };
 
 pub const SUPPORTED_BOARD: &str = "cardputer-adv";
+pub const S3_UART_BOARD: &str = "esp32s3-uart0";
+pub const S3_USB_BOARD: &str = "esp32s3-native-usb";
+pub const C5_UART_BOARD: &str = "esp32c5-uart0";
+pub const C5_USB_BOARD: &str = "esp32c5-native-usb";
 pub const TOOL_VERSION: &str = "5.0.2";
 pub const FLASH_SIZE: u64 = 8 * 1024 * 1024;
+pub const C5_FLASH_SIZE: u64 = 2 * 1024 * 1024;
 const MANIFEST_LIMIT: u64 = 64 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FirmwareLink {
+    NativeUsbSerialJtag,
+    UsbUart,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BoardProfile {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub chip: &'static str,
+    pub flash_size: u64,
+    pub link: FirmwareLink,
+    pub(crate) bootloader_offset: u32,
+    pub(crate) partition_table_offset: u32,
+    pub(crate) application_offset: u32,
+    pub(crate) image_chip_id: u16,
+}
+
+const BOARD_PROFILES: [BoardProfile; 5] = [
+    BoardProfile {
+        id: SUPPORTED_BOARD,
+        label: "Cardputer Adv",
+        chip: "esp32s3",
+        flash_size: FLASH_SIZE,
+        link: FirmwareLink::NativeUsbSerialJtag,
+        bootloader_offset: 0,
+        partition_table_offset: 0x8000,
+        application_offset: 0x10000,
+        image_chip_id: 9,
+    },
+    BoardProfile {
+        id: S3_UART_BOARD,
+        label: "ESP32-S3 · Headless USB-UART / UART0 (8 MiB)",
+        chip: "esp32s3",
+        flash_size: FLASH_SIZE,
+        link: FirmwareLink::UsbUart,
+        bootloader_offset: 0,
+        partition_table_offset: 0x8000,
+        application_offset: 0x10000,
+        image_chip_id: 9,
+    },
+    BoardProfile {
+        id: S3_USB_BOARD,
+        label: "ESP32-S3 · Headless Native USB Serial/JTAG (8 MiB)",
+        chip: "esp32s3",
+        flash_size: FLASH_SIZE,
+        link: FirmwareLink::NativeUsbSerialJtag,
+        bootloader_offset: 0,
+        partition_table_offset: 0x8000,
+        application_offset: 0x10000,
+        image_chip_id: 9,
+    },
+    BoardProfile {
+        id: C5_UART_BOARD,
+        label: "ESP32-C5 · USB-UART / UART0",
+        chip: "esp32c5",
+        flash_size: C5_FLASH_SIZE,
+        link: FirmwareLink::UsbUart,
+        bootloader_offset: 0x2000,
+        partition_table_offset: 0x8000,
+        application_offset: 0x10000,
+        image_chip_id: 0x17,
+    },
+    BoardProfile {
+        id: C5_USB_BOARD,
+        label: "ESP32-C5 · Native USB Serial/JTAG",
+        chip: "esp32c5",
+        flash_size: C5_FLASH_SIZE,
+        link: FirmwareLink::NativeUsbSerialJtag,
+        bootloader_offset: 0x2000,
+        partition_table_offset: 0x8000,
+        application_offset: 0x10000,
+        image_chip_id: 0x17,
+    },
+];
+
+pub fn supported_profiles() -> &'static [BoardProfile] {
+    &BOARD_PROFILES
+}
+
+pub fn profile_for_board(board: &str) -> Option<BoardProfile> {
+    BOARD_PROFILES
+        .iter()
+        .copied()
+        .find(|profile| profile.id == board)
+}
+
+pub fn profile_accepts_usb(board: &str, vid: u16, pid: u16) -> bool {
+    let Some(profile) = profile_for_board(board) else {
+        return false;
+    };
+    match profile.link {
+        FirmwareLink::NativeUsbSerialJtag => vid == 0x303a && pid == 0x1001,
+        FirmwareLink::UsbUart => [0x1a86, 0x10c4, 0x0403].contains(&vid),
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -48,10 +151,34 @@ pub enum ImageKind {
 pub struct ValidatedPackage {
     pub manifest: Manifest,
     pub(crate) paths: Vec<PathBuf>,
+    pub(crate) profile: BoardProfile,
 }
 
 pub fn installed_manifest() -> Result<PathBuf> {
-    Ok(installation_root()?.join("firmware/manifest.json"))
+    installed_manifest_for_board(SUPPORTED_BOARD)
+}
+pub fn installed_manifest_for_board(board: &str) -> Result<PathBuf> {
+    let profile = profile_for_board(board).context("未支持的固件 profile")?;
+    let firmware = installation_root()?.join("firmware");
+    Ok(if profile.id == SUPPORTED_BOARD {
+        firmware.join("manifest.json")
+    } else {
+        firmware
+            .join("profiles")
+            .join(profile.id)
+            .join("manifest.json")
+    })
+}
+pub fn installed_manifests() -> Result<Vec<Manifest>> {
+    let mut manifests = Vec::new();
+    for profile in supported_profiles() {
+        let path = installed_manifest_for_board(profile.id)?;
+        if path.is_file() {
+            manifests.push(validate_package(&path)?.manifest);
+        }
+    }
+    ensure!(!manifests.is_empty(), "未找到已安装的固件 profile");
+    Ok(manifests)
 }
 pub fn installed_tool() -> Result<PathBuf> {
     Ok(installation_root()?.join("tools/esptool/esptool.exe"))
@@ -72,11 +199,10 @@ pub fn validate_package(path: &Path) -> Result<ValidatedPackage> {
     ensure!(bytes.len() as u64 <= MANIFEST_LIMIT, "固件包清单过大");
     let manifest: Manifest = serde_json::from_slice(&bytes).context("固件包清单格式不正确")?;
     ensure!(manifest.format_version == 1, "不支持的固件包格式版本");
+    let profile = profile_for_board(&manifest.board).context("固件包 profile 不受支持")?;
     ensure!(
-        manifest.board == SUPPORTED_BOARD
-            && manifest.chip == "esp32s3"
-            && manifest.flash_size == FLASH_SIZE,
-        "仅支持 Cardputer Adv / ESP32-S3 / 8 MiB Flash"
+        manifest.chip == profile.chip && manifest.flash_size == profile.flash_size,
+        "固件 package profile 与芯片或 Flash 容量不匹配"
     );
     ensure!(
         manifest.tool_version == TOOL_VERSION,
@@ -122,14 +248,14 @@ pub fn validate_package(path: &Path) -> Result<ValidatedPackage> {
             "固件镜像路径越界或重复"
         );
         ensure!(
-            image.length > 0 && image.length <= FLASH_SIZE,
+            image.length > 0 && image.length <= manifest.flash_size,
             "镜像长度无效"
         );
         let end = u64::from(image.offset)
             .checked_add(image.length)
             .context("镜像地址溢出")?;
         ensure!(
-            end <= FLASH_SIZE && image.offset % 4096 == 0,
+            end <= manifest.flash_size && image.offset % 4096 == 0,
             "镜像地址超出 Flash 或未按扇区对齐"
         );
         // esptool erases whole 4 KiB sectors. Include the padded final sector in overlap checks.
@@ -153,8 +279,9 @@ pub fn validate_package(path: &Path) -> Result<ValidatedPackage> {
             let mut header = [0u8; 24];
             File::open(&full)?.read_exact(&mut header)?;
             ensure!(
-                header[0] == 0xe9 && u16::from_le_bytes([header[12], header[13]]) == 9,
-                "镜像不是 ESP32-S3 可执行映像"
+                header[0] == 0xe9
+                    && u16::from_le_bytes([header[12], header[13]]) == profile.image_chip_id,
+                "镜像头与固件 profile 不匹配"
             );
         }
         paths.push(full);
@@ -164,12 +291,17 @@ pub fn validate_package(path: &Path) -> Result<ValidatedPackage> {
         ranges.windows(2).all(|r| r[0].1 <= r[1].0),
         "固件镜像地址或擦除扇区重叠"
     );
-    let package = ValidatedPackage { manifest, paths };
+    let package = ValidatedPackage {
+        manifest,
+        paths,
+        profile,
+    };
     validate_layout(&package)?;
     Ok(package)
 }
 
 fn validate_layout(package: &ValidatedPackage) -> Result<()> {
+    let profile = package.profile;
     let find = |kind| {
         package
             .manifest
@@ -183,11 +315,11 @@ fn validate_layout(package: &ValidatedPackage) -> Result<()> {
     let table = &package.manifest.images[table_index];
     let application = &package.manifest.images[find(ImageKind::Application)];
     ensure!(
-        boot.offset == 0
-            && table.offset == 0x8000
+        boot.offset == profile.bootloader_offset
+            && table.offset == profile.partition_table_offset
             && table.length <= 4096
-            && application.offset == 0x10000,
-        "不支持的 Cardputer Adv 启动布局"
+            && application.offset == profile.application_offset,
+        "固件镜像偏移与 profile 启动布局不匹配"
     );
     let bytes = fs::read(&package.paths[table_index])?;
     let mut partitions = Vec::new();
@@ -203,7 +335,7 @@ fn validate_layout(package: &ValidatedPackage) -> Result<()> {
         ensure!(
             size > 0
                 && offset >= 0x9000
-                && end <= FLASH_SIZE
+                && end <= package.manifest.flash_size
                 && offset.is_multiple_of(4096)
                 && size.is_multiple_of(4096),
             "分区范围无效"
@@ -314,6 +446,30 @@ pub(crate) mod tests {
         save(&path, &manifest);
         (dir, path, manifest)
     }
+    pub(crate) fn c5_fixture(board: &str) -> (tempfile::TempDir, PathBuf, Manifest) {
+        let (dir, path, mut manifest) = fixture();
+        manifest.board = board.into();
+        manifest.chip = "esp32c5".into();
+        manifest.flash_size = C5_FLASH_SIZE;
+        manifest.images[0].offset = 0x2000;
+
+        for index in [0usize, 2] {
+            let image_path = dir.path().join(&manifest.images[index].path);
+            let mut bytes = fs::read(&image_path).unwrap();
+            bytes[12] = 0x17;
+            fs::write(&image_path, bytes).unwrap();
+            manifest.images[index].sha256 = hash_file(&image_path).unwrap();
+        }
+
+        let table_path = dir.path().join(&manifest.images[1].path);
+        let mut table = fs::read(&table_path).unwrap();
+        table[8 + 2 * 32..12 + 2 * 32].copy_from_slice(&0x1f0000u32.to_le_bytes());
+        fs::write(&table_path, table).unwrap();
+        manifest.images[1].sha256 = hash_file(&table_path).unwrap();
+        manifest.layout_id = manifest.images[1].sha256.clone();
+        save(&path, &manifest);
+        (dir, path, manifest)
+    }
     fn save(path: &Path, manifest: &Manifest) {
         fs::write(path, serde_json::to_vec(manifest).unwrap()).unwrap();
     }
@@ -323,6 +479,36 @@ pub(crate) mod tests {
         let package = validate_package(&path).unwrap();
         assert_eq!(package.paths.len(), 3);
         assert_eq!(package.manifest.flash_size, FLASH_SIZE);
+    }
+    #[test]
+    fn validates_both_c5_link_profiles_against_their_2_mib_layout() {
+        for board in [C5_UART_BOARD, C5_USB_BOARD] {
+            let (_dir, path, _) = c5_fixture(board);
+            let package = validate_package(&path).unwrap();
+            assert_eq!(package.manifest.board, board);
+            assert_eq!(package.manifest.chip, "esp32c5");
+            assert_eq!(package.manifest.flash_size, C5_FLASH_SIZE);
+            assert_eq!(package.manifest.images[0].offset, 0x2000);
+        }
+    }
+    #[test]
+    fn c5_packages_reject_s3_headers_and_wrong_capacity() {
+        let (dir, path, original) = c5_fixture(C5_UART_BOARD);
+        let boot = dir.path().join(&original.images[0].path);
+        let mut bytes = fs::read(&boot).unwrap();
+        bytes[12] = 9;
+        fs::write(&boot, &bytes).unwrap();
+        let mut bad_header = original.clone();
+        bad_header.images[0].sha256 = hash_file(&boot).unwrap();
+        save(&path, &bad_header);
+        assert!(validate_package(&path).is_err());
+
+        bytes[12] = 0x17;
+        fs::write(&boot, &bytes).unwrap();
+        let mut bad_capacity = original;
+        bad_capacity.flash_size = FLASH_SIZE;
+        save(&path, &bad_capacity);
+        assert!(validate_package(&path).is_err());
     }
     #[test]
     fn rejects_path_escape_absolute_duplicate_and_unknown_board() {
