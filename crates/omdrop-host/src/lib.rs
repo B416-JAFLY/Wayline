@@ -1,6 +1,7 @@
 //! Shared host preferences and identity. UI and command-line overrides never persist implicitly.
 mod advertisement;
 pub use advertisement::{ReceiverAdvertisement, receiver_advertisement};
+mod transfer_history;
 use anyhow::{Context, Result, bail, ensure};
 use omdrop_core::{Identity, NetworkInterface};
 use serde_json::{Map, Value};
@@ -11,6 +12,10 @@ use std::{
     path::{Path, PathBuf},
     thread,
     time::{Duration, Instant},
+};
+pub use transfer_history::{
+    TransferDirection, TransferFailureReason, TransferHistoryRecord, TransferOutcome,
+    append_transfer_history, clear_transfer_history, load_transfer_history,
 };
 
 pub const MAX_NAME_CHARS: usize = 64;
