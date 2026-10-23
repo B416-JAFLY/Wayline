@@ -4,7 +4,7 @@
 
 支持 Windows 10/11 x64 和 M5Stack Cardputer Adv（ESP32-S3、原生 USB Serial/JTAG、2.4 GHz 信道 6）。电脑需要蓝牙 LE 广播能力，Wi-Fi 收发由 ESP32 承担。
 
-另提供无屏幕的 ESP32-C5 开发板构建，可用于经 USB-UART 桥接的 UART0 和原生 USB Serial/JTAG 开发板。固件按主机请求在 2.4 GHz 信道 6 与 5 GHz 信道 44、149 之间运行时切换，原始发送速率固定为 HE20/MCS0。C5 的 AirDrop 互通与吞吐仍需实机验证，构建与刷写见[开发指南](docs/DEVELOPMENT.zh-CN.md#无屏幕-esp32-c5-构建)。
+同时支持无屏幕 ESP32-S3（8 MiB Flash profile）和 ESP32-C5 开发板，可分别选择 USB-UART/UART0 或原生 USB Serial/JTAG 固件 profile。桌面离线包可包含这些 profile；固件页按板型和 USB 接口选择。C5 按主机请求在 2.4 GHz 信道 6 与 5 GHz 信道 44、149 之间运行时切换，原始发送速率固定为 HE20/MCS0。C5 的 AirDrop 互通与吞吐仍需实机验证，构建与刷写见[开发指南](docs/DEVELOPMENT.zh-CN.md#无屏幕-esp32-c5-构建)。
 
 [English](README.md) · [快速开始](docs/QUICKSTART.zh-CN.md) · [开发指南](docs/DEVELOPMENT.zh-CN.md)
 
@@ -44,6 +44,8 @@
 安装包包含固件、烧录工具和运行库，无需安装开发工具或临时下载依赖。桌面请以普通权限运行，确保资源管理器拖放可用。更新前先完成传输，从托盘退出 Omdrop，并结束 CLI 命令。
 
 - 接收文件默认保存到下载目录的 `Omdrop` 文件夹，可在设置中更改；桌面与 CLI 共用名称、身份和保存目录。
+- 设置页可查看已识别板型并切换受支持的频段和信道；ESP32-S3 支持 2.4 GHz 信道 6，ESP32-C5 另支持 5 GHz 信道 44、149。CLI 可用 `radio status` 和 `radio set`，详见[开发指南](docs/DEVELOPMENT.zh-CN.md#cli-与串口诊断)。
+- 桌面界面提供语言下拉框，支持简体中文、繁體中文、English、日本語、한국어、Français、Deutsch 和 Español；选择保存在本机，托盘、系统对话框和资源管理器入口随之更新。
 - 上传达到 100% 后仍需等待接收端确认，“已送达”才代表发送成功。
 - × 或 Esc 隐藏卡片，接收继续运行；托盘“退出 Omdrop”或 `Ctrl+Q` 结束本客户端任务。其他 CLI 会话仍在使用时，后台继续运行。
 

@@ -11,7 +11,8 @@ See the [development guide](docs/DEVELOPMENT.md#rust-awdl-backend).
 Supports Windows 10/11 x64 and M5Stack Cardputer Adv (ESP32-S3, native USB Serial/JTAG,
 2.4 GHz channel 6). The PC needs Bluetooth LE advertising; ESP32 handles Wi-Fi traffic.
 
-A headless ESP32-C5 development build is available for UART0 and native USB Serial/JTAG boards.
+A headless firmware build is available for ESP32-S3 and ESP32-C5 boards using UART0 USB-UART
+or native USB Serial/JTAG. Desktop packages can include these profiles and select the matching link.
 It switches at runtime between channel 6 (2.4 GHz) and channels 44 and 149 (5 GHz) on host
 request, and its raw transmit rate is fixed to HE20/MCS0. C5 AirDrop interoperability and
 throughput still need device validation. See the
@@ -68,6 +69,12 @@ Before updating, finish transfers, quit Omdrop from the tray, and close CLI comm
 
 - Received files default to Downloads/Omdrop; change the folder in Settings. Desktop and CLI
   share the device name, identity and save directory.
+- Settings shows the identified board and supported radio channels: ESP32-S3 supports 2.4 GHz
+  channel 6; ESP32-C5 also supports 5 GHz channels 44 and 149. CLI commands are `radio status`
+  and `radio set`; see the [development guide](docs/DEVELOPMENT.md#cli-and-radio-diagnostics).
+- The desktop language dropdown supports Simplified Chinese, Traditional Chinese, English,
+  Japanese, Korean, French, German and Spanish. The choice is saved locally and updates the
+  tray, system dialogs and Explorer entries.
 - Uploading to 100% still requires receiver confirmation. Delivered means sending succeeded.
 - × or Esc hides the card while receiving continues. Tray Quit or `Ctrl+Q` ends this client's
   tasks; the service stays active while another CLI session uses it.
@@ -89,7 +96,7 @@ scripts/build-release.ps1
 
 Outputs, including `omdrop-bridge.exe` and verified Wintun, are in `target/release`. For developer installation, run
 `scripts/install-service.ps1` in an administrator terminal. Firmware builds, including the
-headless ESP32-C5 build, tests and offline packaging are covered in the
+headless ESP32-S3 and ESP32-C5 builds, tests and offline packaging are covered in the
 [development guide](docs/DEVELOPMENT.md).
 
 ## Source layout

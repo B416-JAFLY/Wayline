@@ -2,7 +2,7 @@
 
 [简体中文](QUICKSTART.zh-CN.md)
 
-You need Windows 10/11 x64, a PC with Bluetooth LE advertising, M5Stack Cardputer Adv and a USB data cable.
+You need Windows 10/11 x64, a PC with Bluetooth LE advertising, an M5Stack Cardputer Adv or an 8 MiB ESP32-S3 / ESP32-C5 development board, and its USB data cable.
 
 ## Install and update
 
@@ -14,10 +14,10 @@ Before updating, finish transfers, quit Omdrop from the tray, and close CLI comm
 The installer verifies all files before replacement and keeps the previous programs as a backup.
 Received files, device name and identity settings are preserved.
 
-## Initialize Cardputer Adv
+## Initialize the Board
 
 1. Connect the board with a data cable and open Device firmware at the top of the sharing card.
-2. Select the correct serial port and confirm Cardputer Adv.
+2. Select the serial port and matching profile: Cardputer Adv, ESP32-S3 Headless UART0 / Native USB, or ESP32-C5 UART0 / Native USB. UART0 and Native USB profiles must match the USB interface connected to the PC. S3 Headless profiles require 8 MiB flash.
 3. For first use, choose First install / Reinstall. This replaces the program and partition
    layout and may erase data from other firmware. For Omdrop updates, choose Preserve settings;
    this requires recognizable firmware and an identical partition layout.
@@ -36,9 +36,11 @@ for 10 Minutes. The PC's built-in Wi-Fi can stay off; no shared router connectio
 - Send: drop files, or select them from the tray, with `Ctrl+O`, or through Explorer's
   Send with Omdrop menu. Select a recipient and wait for Delivered after uploading reaches 100%.
 - Receive: select this PC in the Apple device's AirDrop list, then accept in Omdrop.
-- Settings: change the device name or receive folder shared by desktop and CLI.
-  The default is Downloads/Omdrop. Changing it leaves existing files in place and is blocked
-  while receiving.
+- Settings: change the device name, receive folder, or interface language. The language dropdown
+  offers Simplified Chinese, Traditional Chinese, English, Japanese, Korean, French, German and
+  Spanish. The name and folder are shared by desktop and CLI. The receive folder defaults to
+  Downloads/Omdrop; changing it leaves existing files in place and is blocked while receiving.
+  The language choice is saved locally and applies immediately.
 - Error details: hover over a notice to expand it, then use Copy to get complete diagnostics.
 
 × or Esc hides the card while receiving continues. Tray Quit or `Ctrl+Q` ends this client's

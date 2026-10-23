@@ -125,14 +125,20 @@ target and writes to its own build directory.
 ```powershell
 espup install --targets esp32s3,esp32c5
 scripts/build-firmware.ps1 -Target esp32c5
+scripts/build-firmware.ps1 -Target esp32c5 -C5NativeUsb
+scripts/build-firmware.ps1 -S3Headless
+scripts/build-firmware.ps1 -S3Headless -S3NativeUsb
 ```
 
 The default image uses UART0 behind the board's USB-UART bridge at 3 Mbaud; output is
 `firmware/build-rust-esp32c5/`. Pass `-C5NativeUsb` when the board wires its native USB
 Serial/JTAG controller to the host; that image is written to `firmware/build-rust-esp32c5-usb/`.
 Component management stays disabled so the ESP32-S3 `firmware/dependencies.lock` is unchanged.
-The C5 image is not packaged for desktop installation; flash it with ESP-IDF and the matching
-build directory:
+Headless S3 profiles reuse the 8 MiB Cardputer-compatible partition layout but omit M5Unified
+and the Cardputer UI; 4 MiB S3 boards do not match these profiles. S3 and C5 UART0 and Native USB
+profiles can be packaged for Desktop and selected in its firmware page. Build records bind each
+profile to its target and sdkconfig hash. For direct ESP-IDF
+flashing, use the matching build directory:
 
 ```powershell
 $fw = (Resolve-Path firmware).Path
@@ -167,11 +173,19 @@ Launch the UI normally so Explorer drag-and-drop works.
 | `--unregister-shell` | Remove the current user's Explorer and Send to entries after quitting |
 | `--version` | Print the version without GPUI or service initialization |
 
-Device name, receive directory and identity live under `%LOCALAPPDATA%\omdrop`.
+Device name, receive directory, interface language and identity live under `%LOCALAPPDATA%\omdrop`.
 `desktop.json` writes preserve unknown settings and use atomic replacement under a process lock.
 Identity creation and advertisement rename history in `receiver-services.json` are also locked.
 `download_directory` defaults to Downloads/Omdrop; changing it leaves existing files in place
-and is blocked during receiving. Full receive errors go to `desktop-receiver.log`.
+and is blocked during receiving. `language` stores `zh-CN`, `zh-TW`, `en-US`, `ja-JP`, `ko-KR`,
+`fr-FR`, `de-DE` or `es-ES`; when absent, Windows UI language selects it and unsupported locales
+fall back to English. Switching language updates the window, tray, system dialogs and
+notifications immediately and re-registers Explorer entries. UI copy lives in
+`apps/desktop/locales/*.toml` (eight locales currently). `apps/desktop/build.rs` checks that every
+locale has the same keys and placeholders and generates the static copy table at build time.
+Adding a language requires a TOML file, a `Language` enum variant and an entry in the build list;
+keep every translation complete. Low-level diagnostics from shared modules (transfer, flashing and
+local settings validation) remain in their source wording. Full receive errors go to `desktop-receiver.log`.
 
 Incoming transfers require confirmation. Completion requires archive validation and the final
 protocol response. Firmware maintenance pauses the idle receiver and rejects active transfers
@@ -216,6 +230,8 @@ they do not start the service, create identity files or open the serial port.
 ```powershell
 cargo run -p omdrop-cli -- status --json
 cargo run -p omdrop-cli -- doctor --json
+cargo run -p omdrop-cli -- radio status --json
+cargo run -p omdrop-cli -- radio set --band 5ghz --channel 44 --json
 cargo run -p omdrop-cli -- discover --timeout 15
 cargo run -p omdrop-cli -- send --to "iPhone Name" --format auto -- "$env:USERPROFILE\Pictures\photo.jpg"
 cargo run -p omdrop-cli -- receive
@@ -226,6 +242,19 @@ Interactive sending can select a recipient by number. Scripts and JSON mode requ
 unambiguous `--to`. `--format auto` selects DVZip when advertised, otherwise gzip CPIO.
 `--no-ble` disables wake advertisements; `--name` and `--save` override shared settings for
 the current command.
+
+`radio status` reads the service-reported board, configured band and channel. `radio set`
+acquires a service session and waits for the bridge restart. ESP32-S3 supports only 2.4 GHz
+channel 6; ESP32-C5 supports channel 6 and 5 GHz channels 44 and 149. Desktop settings use the
+same capability report. The service rejects changes during active sends, receives or firmware
+maintenance. Switching restarts AWDL/Wintun; interoperability and throughput still need device
+validation. Return to channel 6 before changing the radio port. If an ESP32-S3 is connected
+while a 5 GHz channel is saved, select channel 6 in Desktop or run
+`radio set --band 2.4ghz --channel 6` to recover.
+
+Discovery retries each mDNS candidate's TCP/TLS `/Discover` probe throughout `--timeout`,
+using a backoff capped at three seconds. This allows a peer or its receiver service to become
+ready after its initial advertisement.
 
 Receiving shows the sender, files and destination before asking. EOF, cancellation or
 `--decision-timeout` (default 60 seconds) denies the request. Noninteractive and JSON receiving
@@ -285,6 +314,10 @@ partition table; reinstall requires both replacement flags:
 omdrop-cli firmware info --json
 omdrop-cli firmware flash --port COM4 --board cardputer-adv
 omdrop-cli firmware flash --port COM4 --board cardputer-adv --reinstall --yes-replace
+omdrop-cli firmware flash --port COM5 --board esp32s3-uart0 --reinstall --yes-replace
+omdrop-cli firmware flash --port COM6 --board esp32s3-native-usb --reinstall --yes-replace
+omdrop-cli firmware flash --port COM8 --board esp32c5-uart0 --reinstall --yes-replace
+omdrop-cli firmware flash --port COM8 --board esp32c5-native-usb --reinstall --yes-replace
 ```
 
 `--manifest PATH` and `--tool PATH` select developer inputs; tool-version validation still
@@ -371,9 +404,17 @@ Builds and packaging do not start services, open ports or flash hardware.
 ```powershell
 scripts/build-release.ps1
 scripts/build-firmware.ps1
-scripts/package-firmware.ps1 -OutputDirectory build/firmware-package
+scripts/build-firmware.ps1 -S3Headless
+scripts/build-firmware.ps1 -S3Headless -S3NativeUsb
+scripts/build-firmware.ps1 -Target esp32c5
+scripts/build-firmware.ps1 -Target esp32c5 -C5NativeUsb
+scripts/package-firmware.ps1 -BuildDirectory firmware/build-rust -OutputDirectory build/firmware-package-s3
+scripts/package-firmware.ps1 -BuildDirectory firmware/build-rust-esp32s3-headless -OutputDirectory build/firmware-package-s3-uart0
+scripts/package-firmware.ps1 -BuildDirectory firmware/build-rust-esp32s3-headless-usb -OutputDirectory build/firmware-package-s3-usb
+scripts/package-firmware.ps1 -BuildDirectory firmware/build-rust-esp32c5 -OutputDirectory build/firmware-package-c5-uart0
+scripts/package-firmware.ps1 -BuildDirectory firmware/build-rust-esp32c5-usb -OutputDirectory build/firmware-package-c5-usb
 scripts/fetch-flash-tool.ps1 -OutputDirectory .cache/esptool-5.0.2-release
-scripts/package-release.ps1 -OutputDirectory build/release-package -FirmwarePackage build/firmware-package -ToolDirectory .cache/esptool-5.0.2-release/esptool-windows-amd64
+scripts/package-release.ps1 -OutputDirectory build/release-package -FirmwarePackage build/firmware-package-s3 -S3HeadlessUartFirmwarePackage build/firmware-package-s3-uart0 -S3HeadlessNativeUsbFirmwarePackage build/firmware-package-s3-usb -C5UartFirmwarePackage build/firmware-package-c5-uart0 -C5NativeUsbFirmwarePackage build/firmware-package-c5-usb -ToolDirectory .cache/esptool-5.0.2-release/esptool-windows-amd64
 scripts/install-prebuilt.ps1 -PackageRoot build/release-package -VerifyOnly
 ```
 

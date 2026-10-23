@@ -111,9 +111,12 @@ ESP32-C5 构建为无屏幕配置：不包含 M5Unified 和 Cardputer 界面，�
 ```powershell
 espup install --targets esp32s3,esp32c5
 scripts/build-firmware.ps1 -Target esp32c5
+scripts/build-firmware.ps1 -Target esp32c5 -C5NativeUsb
+scripts/build-firmware.ps1 -S3Headless
+scripts/build-firmware.ps1 -S3Headless -S3NativeUsb
 ```
 
-默认镜像通过板载 USB-UART 桥的 UART0 以 3 Mbaud 通信，输出到 `firmware/build-rust-esp32c5/`。开发板将原生 USB Serial/JTAG 接到主机时加 `-C5NativeUsb`，此时输出到 `firmware/build-rust-esp32c5-usb/`。这些构建关闭组件管理，ESP32-S3 的 `firmware/dependencies.lock` 保持不变。C5 镜像不进入桌面固件包，需用 ESP-IDF 和对应构建目录刷写：
+默认 C5 镜像使用 USB-UART 桥接 UART0，输出到 `firmware/build-rust-esp32c5/`；加 `-C5NativeUsb` 构建原生 USB Serial/JTAG profile，输出到 `firmware/build-rust-esp32c5-usb/`。`-S3Headless` 构建关闭 M5Unified/Cardputer UI，输出 UART0 profile；加 `-S3NativeUsb` 构建无屏原生 USB profile。无屏 S3 profile 目前固定为 8 MiB Flash；4 MiB S3 设备不匹配此镜像。所有无屏构建关闭组件管理，ESP32-S3 的 `firmware/dependencies.lock` 保持不变。Desktop 离线包包含 Cardputer、无屏 S3 UART0/Native USB、C5 UART0/Native USB 五个 profile，设备固件页会按端口 USB 接口类型筛选。
 
 ```powershell
 $fw = (Resolve-Path firmware).Path
@@ -137,7 +140,7 @@ python tests/firmware_regression.py -p COM4 --target esp32c5 --five-ghz
 | `--unregister-shell` | 退出后移除当前用户的文件右键和“发送到”入口 |
 | `--version` | 输出版本，不初始化 GPUI 或服务 |
 
-名称、接收目录和身份保存在 `%LOCALAPPDATA%\omdrop`。`desktop.json` 在进程锁下原子写入并保留未知设置；身份创建和 `receiver-services.json` 中的广播更名记录也受锁保护。`download_directory` 默认指向 Downloads/Omdrop，更改时不移动已有文件，接收期间禁止更改。完整接收错误写入 `desktop-receiver.log`。
+名称、接收目录、界面语言和身份保存在 `%LOCALAPPDATA%\omdrop`。`desktop.json` 在进程锁下原子写入并保留未知设置；身份创建和 `receiver-services.json` 中的广播更名记录也受锁保护。`download_directory` 默认指向 Downloads/Omdrop，更改时不移动已有文件，接收期间禁止更改。`language` 保存 `zh-CN`、`zh-TW`、`en-US`、`ja-JP`、`ko-KR`、`fr-FR`、`de-DE` 或 `es-ES`；缺少该字段时按 Windows 界面语言选择，不支持的系统语言回退到 English。切换语言会立即更新窗口、托盘、系统对话框和通知，并重新注册资源管理器入口。界面文案位于 `apps/desktop/locales/*.toml`（当前 8 种语言），`apps/desktop/build.rs` 在构建时校验所有语言的键集合与占位符并生成静态文案表；新增语言时需要同时添加 TOML、`Language` 枚举项和 `build.rs` 构建列表，并保持全部翻译完整。共享模块（传输、烧录和本地设置校验）的底层错误详情仍按原文显示。完整接收错误写入 `desktop-receiver.log`。
 
 接收须经用户确认，完成须通过归档校验和最终协议回应。固件维护会暂停空闲接收器；活动传输或其他接收器会阻止维护。取消或退出时，等待烧录子进程结束后再释放设备。
 
@@ -169,6 +172,8 @@ node scripts/generate-firmware-logo.cjs
 ```powershell
 cargo run -p omdrop-cli -- status --json
 cargo run -p omdrop-cli -- doctor --json
+cargo run -p omdrop-cli -- radio status --json
+cargo run -p omdrop-cli -- radio set --band 5ghz --channel 44 --json
 cargo run -p omdrop-cli -- discover --timeout 15
 cargo run -p omdrop-cli -- send --to "iPhone Name" --format auto -- "$env:USERPROFILE\Pictures\photo.jpg"
 cargo run -p omdrop-cli -- receive
@@ -176,6 +181,10 @@ cargo run -p omdrop-cli -- receive --accept-all --save "$env:USERPROFILE\Downloa
 ```
 
 交互发送可按编号选择设备；脚本和 JSON 模式必须提供精确且无歧义的 `--to`。`--format auto` 优先使用对端声明的 DVZip，否则使用 gzip CPIO。`--no-ble` 关闭唤醒广播，`--name` 和 `--save` 仅覆盖本次命令的共用设置。
+
+`radio status` 读取服务报告的板型、配置频段和信道；`radio set` 会启动服务会话并等待 bridge 重启完成。频段与信道必须匹配：ESP32-S3 仅支持 2.4 GHz 信道 6，ESP32-C5 支持 2.4 GHz 信道 6 和 5 GHz 信道 44、149。桌面设置页使用同一能力状态。活动发送、接收或固件维护期间，service 拒绝无线配置变更；重启期间也暂拒新的收发和维护会话。更换无线端口前须先切回信道 6，再由新板型确认 5 GHz 能力。若在 ESP32-S3 上遗留 5 GHz 配置，可从桌面选择信道 6，或运行 `radio set --band 2.4ghz --channel 6` 恢复。切换会重启 AWDL/Wintun，真实设备上的互通和吞吐仍需验收。
+
+发现会在 `--timeout` 期间持续重试 mDNS 设备的 TCP/TLS `/Discover` 探测；连接失败后按最多 3 秒的退避间隔重试，以覆盖无线邻居或接收服务稍晚就绪的情况。
 
 接收先显示发送方、文件和保存位置，再询问是否接受。EOF、取消或 `--decision-timeout` 超时（默认 60 秒）会拒绝请求。非交互与 JSON 接收必须显式传入 `--accept-all`，授权仅对本次命令有效。
 
@@ -217,9 +226,13 @@ cargo run -p omdrop-cli -- receive --bind "[::1]:8771" --accept-all --save "$env
 omdrop-cli firmware info --json
 omdrop-cli firmware flash --port COM4 --board cardputer-adv
 omdrop-cli firmware flash --port COM4 --board cardputer-adv --reinstall --yes-replace
+omdrop-cli firmware flash --port COM5 --board esp32s3-uart0 --reinstall --yes-replace
+omdrop-cli firmware flash --port COM6 --board esp32s3-native-usb --reinstall --yes-replace
+omdrop-cli firmware flash --port COM8 --board esp32c5-uart0 --reinstall --yes-replace
+omdrop-cli firmware flash --port COM8 --board esp32c5-native-usb --reinstall --yes-replace
 ```
 
-`--manifest PATH` 和 `--tool PATH` 指定开发输入，仍校验工具版本。未安装服务时允许独立首次安装；已安装但不可用的服务会报错。两种模式都受设备锁保护。
+`--board` 固定可选 profile 为 `cardputer-adv`、`esp32s3-uart0`、`esp32s3-native-usb`、`esp32c5-uart0` 和 `esp32c5-native-usb`，并与固件清单中的板型、芯片、Flash 容量及接口类型匹配。`--manifest PATH` 和 `--tool PATH` 指定开发输入，仍校验工具版本。未安装服务时允许独立首次安装；已安装但不可用的服务会报错。两种模式都受设备锁保护。
 
 ### 串口诊断
 
@@ -280,9 +293,17 @@ cargo run -p omdrop-service -- --console --data-dir E:\path\to\service-data --pi
 ```powershell
 scripts/build-release.ps1
 scripts/build-firmware.ps1
-scripts/package-firmware.ps1 -OutputDirectory build/firmware-package
+scripts/build-firmware.ps1 -S3Headless
+scripts/build-firmware.ps1 -S3Headless -S3NativeUsb
+scripts/build-firmware.ps1 -Target esp32c5
+scripts/build-firmware.ps1 -Target esp32c5 -C5NativeUsb
+scripts/package-firmware.ps1 -BuildDirectory firmware/build-rust -OutputDirectory build/firmware-package-s3
+scripts/package-firmware.ps1 -BuildDirectory firmware/build-rust-esp32s3-headless -OutputDirectory build/firmware-package-s3-uart0
+scripts/package-firmware.ps1 -BuildDirectory firmware/build-rust-esp32s3-headless-usb -OutputDirectory build/firmware-package-s3-usb
+scripts/package-firmware.ps1 -BuildDirectory firmware/build-rust-esp32c5 -OutputDirectory build/firmware-package-c5-uart0
+scripts/package-firmware.ps1 -BuildDirectory firmware/build-rust-esp32c5-usb -OutputDirectory build/firmware-package-c5-usb
 scripts/fetch-flash-tool.ps1 -OutputDirectory .cache/esptool-5.0.2-release
-scripts/package-release.ps1 -OutputDirectory build/release-package -FirmwarePackage build/firmware-package -ToolDirectory .cache/esptool-5.0.2-release/esptool-windows-amd64
+scripts/package-release.ps1 -OutputDirectory build/release-package -FirmwarePackage build/firmware-package-s3 -S3HeadlessUartFirmwarePackage build/firmware-package-s3-uart0 -S3HeadlessNativeUsbFirmwarePackage build/firmware-package-s3-usb -C5UartFirmwarePackage build/firmware-package-c5-uart0 -C5NativeUsbFirmwarePackage build/firmware-package-c5-usb -ToolDirectory .cache/esptool-5.0.2-release/esptool-windows-amd64
 scripts/install-prebuilt.ps1 -PackageRoot build/release-package -VerifyOnly
 ```
 
