@@ -21,6 +21,8 @@ mod name_input;
 #[cfg(windows)]
 mod native;
 #[cfg(windows)]
+mod notification;
+#[cfg(windows)]
 mod orb;
 #[cfg(windows)]
 mod orb_geometry;

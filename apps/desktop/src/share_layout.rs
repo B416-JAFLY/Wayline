@@ -53,7 +53,6 @@ pub fn notice_banner(
 ) -> impl IntoElement {
     div()
         .id(("share-notice", content.id))
-        .mt(px(8.))
         .flex_shrink_0()
         .w_full()
         .min_w_0()
@@ -137,4 +136,31 @@ pub fn notice_banner(
                         .on_click(on_dismiss),
                 ),
         )
+}
+
+pub fn notice_overlay(
+    content: NoticeContent,
+    position: omdrop_host::NotificationPosition,
+    on_hover: impl Fn(&bool, &mut Window, &mut App) + 'static,
+    on_details_hover: impl Fn(&bool, &mut Window, &mut App) + 'static,
+    on_copy: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_dismiss: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let id = content.id;
+    let banner = notice_banner(content, on_hover, on_details_hover, on_copy, on_dismiss);
+    let mut overlay = div()
+        .id(("share-notice-overlay", id))
+        .absolute()
+        .w(px(280.))
+        .min_w_0()
+        .child(banner);
+    overlay = match position {
+        omdrop_host::NotificationPosition::TopLeft => overlay.top(px(62.)).left(px(22.)),
+        omdrop_host::NotificationPosition::TopCenter => overlay.top(px(62.)).left(px(38.)),
+        omdrop_host::NotificationPosition::TopRight => overlay.top(px(62.)).right(px(22.)),
+        omdrop_host::NotificationPosition::BottomLeft => overlay.bottom(px(104.)).left(px(22.)),
+        omdrop_host::NotificationPosition::BottomCenter => overlay.bottom(px(104.)).left(px(38.)),
+        omdrop_host::NotificationPosition::BottomRight => overlay.bottom(px(104.)).right(px(22.)),
+    };
+    overlay
 }

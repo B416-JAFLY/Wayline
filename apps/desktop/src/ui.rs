@@ -61,7 +61,13 @@ pub struct Capsule {
     history_delete_files: bool,
     history_preference_pending: bool,
     history_worker: Option<crate::history::StoreWorker>,
+    notification_position: crate::settings::NotificationPosition,
+    notification_duration_seconds: u64,
+    desktop_notifications_enabled: bool,
+    notification_window: Option<WindowHandle<crate::notification::DesktopNotification>>,
     language_menu_open: bool,
+    notification_position_menu_open: bool,
+    notification_duration_menu_open: bool,
     settings_error: Option<String>,
     radio_channel_pending: Option<u16>,
     name_saved: bool,
@@ -110,6 +116,31 @@ impl Capsule {
                 false
             }
         };
+        let notification_position = match crate::settings::load_notification_position() {
+            Ok(position) => position,
+            Err(error) => {
+                settings_error = Some(format!("{}{error:#}", text.err_notification_position_load));
+                crate::settings::NotificationPosition::DEFAULT
+            }
+        };
+        let notification_duration_seconds =
+            match crate::settings::load_notification_duration_seconds() {
+                Ok(seconds) => seconds,
+                Err(error) => {
+                    settings_error =
+                        Some(format!("{}{error:#}", text.err_notification_duration_load));
+                    crate::settings::DEFAULT_NOTIFICATION_DURATION_SECONDS
+                }
+            };
+        let desktop_notifications_enabled =
+            match crate::settings::load_desktop_notifications_enabled() {
+                Ok(enabled) => enabled,
+                Err(error) => {
+                    settings_error =
+                        Some(format!("{}{error:#}", text.err_notification_enabled_load));
+                    true
+                }
+            };
         let download_directory = match crate::receiving::save_directory() {
             Ok(directory) => Some(directory),
             Err(error) => {
@@ -183,7 +214,13 @@ impl Capsule {
             history_delete_files,
             history_preference_pending: false,
             history_worker: Some(history_worker),
+            notification_position,
+            notification_duration_seconds,
+            desktop_notifications_enabled,
+            notification_window: None,
             language_menu_open: false,
+            notification_position_menu_open: false,
+            notification_duration_menu_open: false,
             settings_error,
             radio_channel_pending: None,
             name_saved: false,
@@ -513,11 +550,12 @@ impl Capsule {
                     }
                     if applied
                         && matches!(event, omdrop_core::ReceiverEvent::Received { .. })
-                        && let (Some(shell), Some(message)) = (&self.shell, &self.receive.notice)
+                        && let Some(notice) = &self.receive.notice
                     {
-                        shell.notify(
-                            self.language.strings().notice_files_received,
-                            &message.message,
+                        self.show_desktop_notification(
+                            notice.message.clone(),
+                            notice.full_text.clone(),
+                            cx,
                         );
                     }
                     changed |= applied;
@@ -1022,6 +1060,8 @@ impl Capsule {
         self.settings_open = true;
         self.history_open = false;
         self.language_menu_open = false;
+        self.notification_position_menu_open = false;
+        self.notification_duration_menu_open = false;
         self.firmware.open = false;
         self.name_saved = false;
         self.focus.focus(window);
@@ -1044,6 +1084,8 @@ impl Capsule {
         } else if self.settings_open {
             self.settings_open = false;
             self.language_menu_open = false;
+            self.notification_position_menu_open = false;
+            self.notification_duration_menu_open = false;
             self.finish_name_edit(window);
             self.name_saved = false;
             self.focus.focus(window);
@@ -1372,6 +1414,7 @@ impl Capsule {
             .flex_col()
             .p(px(22.))
             .overflow_hidden()
+            .relative()
             .when(self.drop_hovered, |panel| {
                 panel.border_color(rgb(BLUE)).bg(rgb(0x202b38))
             })
@@ -1631,61 +1674,6 @@ impl Capsule {
                                 || self.firmware.open),
                         |panel| panel.child(self.receiving_view(true)),
                     )
-                    .children(self.receive.notice.as_ref().map(|notice| {
-                        let id = notice.id;
-                        let color = match notice.kind {
-                            crate::receiving::NoticeKind::Info => MUTED,
-                            crate::receiving::NoticeKind::Success => 0x30d158,
-                            crate::receiving::NoticeKind::Error => 0xffb56b,
-                        };
-                        crate::share_layout::notice_banner(
-                            crate::share_layout::NoticeContent {
-                                id,
-                                message: notice.message.clone(),
-                                full_text: notice.full_text.clone(),
-                                color,
-                                expanded: notice.details_visible,
-                                copied: notice.copied,
-                                copy_label: text.copy,
-                                copied_label: text.copied,
-                            },
-                            cx.listener(move |this, hovered, _, cx| {
-                                if this.receive.set_notice_hovered(
-                                    id,
-                                    crate::receiving::NoticeArea::Banner,
-                                    *hovered,
-                                ) {
-                                    cx.notify();
-                                }
-                            }),
-                            cx.listener(move |this, hovered, _, cx| {
-                                if this.receive.set_notice_hovered(
-                                    id,
-                                    crate::receiving::NoticeArea::Details,
-                                    *hovered,
-                                ) {
-                                    cx.notify();
-                                }
-                            }),
-                            cx.listener(move |this, _, _, cx| {
-                                if let Some(text) = this.receive.copy_notice(id) {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(text));
-                                    cx.notify();
-                                }
-                            }),
-                            cx.listener(move |this, _, _, cx| {
-                                if this
-                                    .receive
-                                    .notice
-                                    .as_ref()
-                                    .is_some_and(|notice| notice.id == id)
-                                    && this.receive.dismiss_notice()
-                                {
-                                    cx.notify();
-                                }
-                            }),
-                        )
-                    }))
                     .when(self.receiver_declined_until.is_some(), |panel| {
                         panel.child(
                             div()
@@ -1726,6 +1714,14 @@ impl Capsule {
                     } else {
                         text.footer_choose
                     }),
+            )
+            .children(
+                (self.incoming.is_none()
+                    && !self.settings_open
+                    && !self.history_open
+                    && !self.firmware.open)
+                    .then(|| self.receive_notice_view(cx))
+                    .flatten(),
             )
             .into_any_element()
     }
@@ -2499,6 +2495,439 @@ impl Capsule {
         cx.notify();
     }
 
+    fn set_notification_position(
+        &mut self,
+        position: crate::settings::NotificationPosition,
+        cx: &mut Context<Self>,
+    ) {
+        if self.notification_position == position {
+            return;
+        }
+        let result = crate::settings::path()
+            .and_then(|path| crate::settings::save_notification_position_to(&path, position));
+        match result {
+            Ok(position) => {
+                self.notification_position = position;
+                self.settings_error = None;
+            }
+            Err(error) => {
+                self.settings_error = Some(format!(
+                    "{}{error:#}",
+                    self.language.strings().err_notification_position_save
+                ));
+            }
+        }
+        cx.notify();
+    }
+
+    fn set_notification_duration(&mut self, seconds: u64, cx: &mut Context<Self>) {
+        if self.notification_duration_seconds == seconds {
+            self.notification_duration_menu_open = false;
+            cx.notify();
+            return;
+        }
+        let result = crate::settings::path().and_then(|path| {
+            crate::settings::save_notification_duration_seconds_to(&path, seconds)
+        });
+        match result {
+            Ok(seconds) => {
+                self.notification_duration_seconds = seconds;
+                self.settings_error = None;
+            }
+            Err(error) => {
+                self.settings_error = Some(format!(
+                    "{}{error:#}",
+                    self.language.strings().err_notification_duration_save
+                ));
+            }
+        }
+        self.notification_duration_menu_open = false;
+        cx.notify();
+    }
+
+    fn set_desktop_notifications_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        let result = crate::settings::path().and_then(|path| {
+            crate::settings::save_desktop_notifications_enabled_to(&path, enabled)
+        });
+        match result {
+            Ok(enabled) => {
+                self.desktop_notifications_enabled = enabled;
+                self.settings_error = None;
+            }
+            Err(error) => {
+                self.settings_error = Some(format!(
+                    "{}{error:#}",
+                    self.language.strings().err_notification_enabled_save
+                ));
+            }
+        }
+        cx.notify();
+    }
+
+    fn notification_position_label(&self) -> &'static str {
+        let text = self.language.strings();
+        match self.notification_position {
+            crate::settings::NotificationPosition::TopLeft => text.notice_position_top_left,
+            crate::settings::NotificationPosition::TopCenter => text.notice_position_top_center,
+            crate::settings::NotificationPosition::TopRight => text.notice_position_top_right,
+            crate::settings::NotificationPosition::BottomLeft => text.notice_position_bottom_left,
+            crate::settings::NotificationPosition::BottomCenter => {
+                text.notice_position_bottom_center
+            }
+            crate::settings::NotificationPosition::BottomRight => text.notice_position_bottom_right,
+        }
+    }
+
+    fn notification_position_select(&self, cx: &mut Context<Self>) -> AnyElement {
+        let text = self.language.strings();
+        let options = [
+            (
+                crate::settings::NotificationPosition::TopLeft,
+                text.notice_position_top_left,
+            ),
+            (
+                crate::settings::NotificationPosition::TopCenter,
+                text.notice_position_top_center,
+            ),
+            (
+                crate::settings::NotificationPosition::TopRight,
+                text.notice_position_top_right,
+            ),
+            (
+                crate::settings::NotificationPosition::BottomLeft,
+                text.notice_position_bottom_left,
+            ),
+            (
+                crate::settings::NotificationPosition::BottomCenter,
+                text.notice_position_bottom_center,
+            ),
+            (
+                crate::settings::NotificationPosition::BottomRight,
+                text.notice_position_bottom_right,
+            ),
+        ];
+        let open = self.notification_position_menu_open;
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                if this.notification_position_menu_open {
+                    this.notification_position_menu_open = false;
+                    cx.notify();
+                }
+            }))
+            .child(
+                div()
+                    .id("notification-position-select")
+                    .h(px(36.))
+                    .w_full()
+                    .px(px(12.))
+                    .rounded(px(9.))
+                    .border_1()
+                    .border_color(rgb(if open { BLUE } else { 0x3a3a40 }))
+                    .bg(rgb(0x202024))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .cursor_pointer()
+                    .text_size(px(12.))
+                    .hover(|style| style.bg(rgb(0x2a2a31)))
+                    .child(self.notification_position_label())
+                    .child(dropdown_chevron(open))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.notification_position_menu_open =
+                            !this.notification_position_menu_open;
+                        this.notification_duration_menu_open = false;
+                        cx.notify();
+                    })),
+            )
+            .when(open, |field| {
+                field.child(
+                    div()
+                        .id("notification-position-menu")
+                        .w_full()
+                        .rounded(px(10.))
+                        .border_1()
+                        .border_color(rgba(0xffffff18))
+                        .bg(rgb(0x1c1c1f))
+                        .p(px(4.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .children(options.into_iter().enumerate().map(
+                            |(index, (position, label))| {
+                                let selected = self.notification_position == position;
+                                div()
+                                    .id(("notification-position-option", index))
+                                    .h(px(30.))
+                                    .flex_shrink_0()
+                                    .px(px(8.))
+                                    .rounded(px(6.))
+                                    .bg(rgb(if selected { 0x163353 } else { 0x1c1c1f }))
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .cursor_pointer()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(if selected { INK } else { MUTED }))
+                                    .hover(|style| style.bg(rgb(0x2f2f36)))
+                                    .child(label)
+                                    .when(selected, |row| {
+                                        row.child(div().text_color(rgb(BLUE)).child("✓"))
+                                    })
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.notification_position_menu_open = false;
+                                        this.set_notification_position(position, cx);
+                                    }))
+                            },
+                        )),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn notification_duration_select(&self, cx: &mut Context<Self>) -> AnyElement {
+        let open = self.notification_duration_menu_open;
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                if this.notification_duration_menu_open {
+                    this.notification_duration_menu_open = false;
+                    cx.notify();
+                }
+            }))
+            .child(
+                div()
+                    .id("notification-duration-select")
+                    .h(px(36.))
+                    .w_full()
+                    .px(px(12.))
+                    .rounded(px(9.))
+                    .border_1()
+                    .border_color(rgb(if open { BLUE } else { 0x3a3a40 }))
+                    .bg(rgb(0x202024))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .cursor_pointer()
+                    .text_size(px(12.))
+                    .hover(|style| style.bg(rgb(0x2a2a31)))
+                    .child(
+                        self.language
+                            .notification_duration(self.notification_duration_seconds),
+                    )
+                    .child(dropdown_chevron(open))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.notification_duration_menu_open =
+                            !this.notification_duration_menu_open;
+                        this.notification_position_menu_open = false;
+                        cx.notify();
+                    })),
+            )
+            .when(open, |field| {
+                field.child(
+                    div()
+                        .id("notification-duration-menu")
+                        .w_full()
+                        .rounded(px(10.))
+                        .border_1()
+                        .border_color(rgba(0xffffff18))
+                        .bg(rgb(0x1c1c1f))
+                        .p(px(4.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .children(
+                            crate::settings::NOTIFICATION_DURATION_OPTIONS
+                                .into_iter()
+                                .map(|seconds| {
+                                    let selected = self.notification_duration_seconds == seconds;
+                                    div()
+                                        .id(("notification-duration-option", seconds as usize))
+                                        .h(px(30.))
+                                        .flex_shrink_0()
+                                        .px(px(8.))
+                                        .rounded(px(6.))
+                                        .bg(rgb(if selected { 0x163353 } else { 0x1c1c1f }))
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .cursor_pointer()
+                                        .text_size(px(11.))
+                                        .text_color(rgb(if selected { INK } else { MUTED }))
+                                        .hover(|style| style.bg(rgb(0x2f2f36)))
+                                        .child(self.language.notification_duration(seconds))
+                                        .when(selected, |row| {
+                                            row.child(div().text_color(rgb(BLUE)).child("✓"))
+                                        })
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.set_notification_duration(seconds, cx)
+                                        }))
+                                }),
+                        ),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn show_desktop_notification(
+        &mut self,
+        message: String,
+        full_text: String,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.desktop_notifications_enabled {
+            return;
+        }
+        if let Some(previous) = self.notification_window.take() {
+            let _ = previous.update(cx, |_, window, _| window.remove_window());
+        }
+        let Some(owner) = self.shell.as_ref().map(Shell::notification_owner) else {
+            return;
+        };
+        let text = self.language.strings();
+        let title = text.notice_files_received;
+        let copy = text.copy;
+        let copied = text.copied;
+        let position = self.notification_position;
+        let duration_seconds = self.notification_duration_seconds;
+        let fallback_title = title;
+        let fallback_message = message.clone();
+        let positioning_fallback_message = message.clone();
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                point(px(0.), px(0.)),
+                size(
+                    px(crate::notification::DesktopNotification::width()),
+                    px(crate::notification::DesktopNotification::height()),
+                ),
+            ))),
+            titlebar: None,
+            kind: WindowKind::PopUp,
+            focus: false,
+            show: true,
+            is_movable: false,
+            is_resizable: false,
+            is_minimizable: false,
+            window_background: WindowBackgroundAppearance::Transparent,
+            ..Default::default()
+        };
+        match cx.open_window(options, move |window, cx| {
+            cx.new(|cx| {
+                crate::notification::DesktopNotification::new(
+                    window,
+                    cx,
+                    crate::notification::NotificationContent {
+                        title: title.into(),
+                        message: message.clone(),
+                        full_text,
+                        copy_label: copy,
+                        copied_label: copied,
+                        duration_seconds,
+                    },
+                )
+            })
+        }) {
+            Ok(notification) => {
+                let positioned = notification;
+                cx.defer(move |cx| {
+                    let position_result = positioned
+                        .update(cx, |_, window, _| {
+                            crate::native::queue_notification_position(
+                                owner,
+                                window,
+                                position,
+                                crate::notification::DesktopNotification::width(),
+                                crate::notification::DesktopNotification::height(),
+                                fallback_title,
+                                &positioning_fallback_message,
+                            )
+                        })
+                        .and_then(|result| result);
+                    if let Err(error) = position_result {
+                        eprintln!("无法定位 Windows 桌面通知：{error:#}");
+                        let _ = positioned.update(cx, |_, window, _| window.remove_window());
+                        crate::native::notify_owner(owner, fallback_title, &fallback_message);
+                    }
+                });
+                self.notification_window = Some(notification);
+            }
+            Err(error) => {
+                eprintln!("无法打开 Windows 桌面通知：{error:#}");
+                if let Some(shell) = &self.shell {
+                    shell.notify(title, &fallback_message);
+                }
+            }
+        }
+    }
+
+    fn receive_notice_view(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let notice = self.receive.notice.as_ref()?;
+        if notice.kind == crate::receiving::NoticeKind::Success {
+            return None;
+        }
+        let id = notice.id;
+        let color = match notice.kind {
+            crate::receiving::NoticeKind::Info => MUTED,
+            crate::receiving::NoticeKind::Success => 0x30d158,
+            crate::receiving::NoticeKind::Error => 0xffb56b,
+        };
+        Some(
+            crate::share_layout::notice_overlay(
+                crate::share_layout::NoticeContent {
+                    id,
+                    message: notice.message.clone(),
+                    full_text: notice.full_text.clone(),
+                    color,
+                    expanded: notice.details_visible,
+                    copied: notice.copied,
+                    copy_label: self.language.strings().copy,
+                    copied_label: self.language.strings().copied,
+                },
+                self.notification_position,
+                cx.listener(move |this, hovered, _, cx| {
+                    if this.receive.set_notice_hovered(
+                        id,
+                        crate::receiving::NoticeArea::Banner,
+                        *hovered,
+                    ) {
+                        cx.notify();
+                    }
+                }),
+                cx.listener(move |this, hovered, _, cx| {
+                    if this.receive.set_notice_hovered(
+                        id,
+                        crate::receiving::NoticeArea::Details,
+                        *hovered,
+                    ) {
+                        cx.notify();
+                    }
+                }),
+                cx.listener(move |this, _, _, cx| {
+                    if let Some(text) = this.receive.copy_notice(id) {
+                        cx.write_to_clipboard(ClipboardItem::new_string(text));
+                        cx.notify();
+                    }
+                }),
+                cx.listener(move |this, _, _, cx| {
+                    if this
+                        .receive
+                        .notice
+                        .as_ref()
+                        .is_some_and(|notice| notice.id == id)
+                        && this.receive.dismiss_notice()
+                    {
+                        cx.notify();
+                    }
+                }),
+            )
+            .into_any_element(),
+        )
+    }
+
     fn settings_view(&self, cx: &mut Context<Self>) -> AnyElement {
         let text = self.language.strings();
         div()
@@ -2510,6 +2939,33 @@ impl Capsule {
             .flex_col()
             .gap(px(12.))
             .child(self.language_settings_view(cx))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .rounded(px(16.))
+                    .bg(rgb(SURFACE))
+                    .p(px(16.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(10.))
+                    .child(
+                        checkbox(
+                            "desktop-notifications-enabled",
+                            text.notice_enabled,
+                            self.desktop_notifications_enabled,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.set_desktop_notifications_enabled(
+                                !this.desktop_notifications_enabled,
+                                cx,
+                            )
+                        })),
+                    )
+                    .child(div().text_size(px(13.)).child(text.notice_position_title))
+                    .child(self.notification_position_select(cx))
+                    .child(div().text_size(px(13.)).child(text.notice_duration_title))
+                    .child(self.notification_duration_select(cx)),
+            )
             .child(self.radio_settings_view(cx))
             .child(
                 div()
@@ -3992,6 +4448,7 @@ impl Capsule {
         let text = self.language.strings();
         let complete = self.model.phase == Phase::Complete;
         let declined = self.model.phase == Phase::Declined;
+        let uploading = matches!(self.model.phase, Phase::Uploading { .. });
         let subtitle = match self.model.phase {
             Phase::Preparing => text.transfer_preparing,
             Phase::Waiting => text.transfer_waiting,
@@ -4010,10 +4467,11 @@ impl Capsule {
             .flex_col()
             .items_center()
             .justify_center()
-            .gap(px(14.))
+            .gap(px(if uploading { 8. } else { 14. }))
             .child(
                 div()
                     .size(px(76.))
+                    .flex_shrink_0()
                     .rounded_full()
                     .bg(rgb(if complete {
                         0x203b2b
@@ -4043,24 +4501,31 @@ impl Capsule {
             )
             .child(
                 div()
+                    .flex_shrink_0()
                     .text_size(px(22.))
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(self.model.phase.title(self.language)),
             )
             .child(
                 div()
+                    .flex_shrink_0()
                     .text_size(px(12.))
                     .text_color(rgb(MUTED))
                     .child(self.model.target.clone()),
             )
-            .child(div().text_size(px(11.)).text_color(rgb(MUTED)).child(
-                self.language.transfer_network(
-                    self.model.transfer_metadata().0,
-                    self.model.transfer_metadata().1,
-                ),
-            ))
             .child(
                 div()
+                    .flex_shrink_0()
+                    .text_size(px(11.))
+                    .text_color(rgb(MUTED))
+                    .child(self.language.transfer_network(
+                        self.model.transfer_metadata().0,
+                        self.model.transfer_metadata().1,
+                    )),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
                     .text_size(px(11.))
                     .text_color(rgb(MUTED))
                     .text_center()
@@ -4077,6 +4542,7 @@ impl Capsule {
                     div()
                         .w_full()
                         .h(px(5.))
+                        .flex_shrink_0()
                         .rounded_full()
                         .bg(rgb(0x3a3a40))
                         .child(
@@ -4089,6 +4555,7 @@ impl Capsule {
                 )
                 .child(
                     div()
+                        .flex_shrink_0()
                         .text_size(px(11.))
                         .text_color(rgb(MUTED))
                         .child(format!(
@@ -4101,6 +4568,7 @@ impl Capsule {
             if let Some(bytes) = self.model.speed_bytes_per_second {
                 view = view.child(
                     div()
+                        .flex_shrink_0()
                         .text_size(px(11.))
                         .text_color(rgb(MUTED))
                         .child(self.language.transfer_speed(&file_size(bytes))),
@@ -4109,10 +4577,14 @@ impl Capsule {
         }
         if let Some(duration) = self.model.send_elapsed(Instant::now()) {
             view = view.child(
-                div().text_size(px(11.)).text_color(rgb(MUTED)).child(
-                    self.language
-                        .transfer_elapsed(duration.as_millis().min(u64::MAX as u128) as u64),
-                ),
+                div()
+                    .flex_shrink_0()
+                    .text_size(px(11.))
+                    .text_color(rgb(MUTED))
+                    .child(
+                        self.language
+                            .transfer_elapsed(duration.as_millis().min(u64::MAX as u128) as u64),
+                    ),
             );
         }
         view = view.children(
@@ -4133,6 +4605,7 @@ impl Capsule {
                     false,
                 )
                 .w_full()
+                .flex_shrink_0()
                 .mt(px(12.))
                 .on_click(cx.listener(|this, _, _, cx| {
                     if this.model.phase != Phase::Cancelling {
@@ -4152,6 +4625,7 @@ impl Capsule {
                     true,
                 )
                 .w_full()
+                .flex_shrink_0()
                 .mt(px(12.))
                 .on_click(cx.listener(|this, _, window, cx| {
                     if this.model.phase == Phase::Complete {
@@ -4221,6 +4695,14 @@ impl Render for Capsule {
                 if this.language_menu_open && event.keystroke.key == "escape" {
                     this.language_menu_open = false;
                     cx.notify();
+                    return;
+                }
+                if this.notification_position_menu_open || this.notification_duration_menu_open {
+                    if event.keystroke.key == "escape" {
+                        this.notification_position_menu_open = false;
+                        this.notification_duration_menu_open = false;
+                        cx.notify();
+                    }
                     return;
                 }
                 if this.name_input.is_some() {

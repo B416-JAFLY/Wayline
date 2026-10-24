@@ -69,6 +69,8 @@ Before updating, finish transfers, quit Omdrop from the tray, and close CLI comm
 
 - Received files default to Downloads/Omdrop; change the folder in Settings. Desktop and CLI
   share the device name, identity and save directory.
+- Receive results can appear in a separate, dismissible desktop notification window. Settings lets
+  you enable or disable it, choose among six screen positions, and set a 3–30 second dismissal delay.
 - Active send and receive cards show smoothed transfer speed and elapsed time. Timing starts
   when data transfer begins, includes final confirmation, and excludes preparation and acceptance waits.
 - The history icon at the top of the sharing card opens Recent transfers with up to 200 results.

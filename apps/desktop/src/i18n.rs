@@ -264,6 +264,13 @@ impl Language {
         )
     }
 
+    pub fn notification_duration(self, seconds: u64) -> String {
+        fill(
+            self.strings().notice_duration_seconds,
+            &[("seconds", seconds.to_string())],
+        )
+    }
+
     pub fn firmware_package_version(self, version: Option<&str>) -> String {
         let version = version
             .unwrap_or(self.strings().firmware_not_found)
@@ -331,6 +338,7 @@ mod tests {
     fn named_templates_fill_without_reinterpreting_inserted_values() {
         assert_eq!(Language::ZhCn.label(), "简体中文");
         assert_eq!(Language::EnUs.file_count(3), "3 files");
+        assert_eq!(Language::EnUs.notification_duration(8), "8 seconds");
         assert_eq!(Language::ZhCn.name_char_count(2, 64), "2 / 64 字符");
         assert_eq!(
             Language::EnUs.received_notice("{files}", 2, "C:\\{path}"),
@@ -345,6 +353,7 @@ mod tests {
             assert!(!strings.settings_title.is_empty());
             assert!(!strings.firmware_start_install.is_empty());
             assert!(!language.file_count(2).is_empty());
+            assert!(!language.notification_duration(8).is_empty());
             assert!(language.incoming_ask("A", 2).contains('A'));
             assert!(
                 language

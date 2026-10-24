@@ -1,5 +1,5 @@
 //! Small Windows shell adapter. Networking and rendering remain in Rust/GPUI.
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::{
     mem::size_of,
@@ -53,6 +53,17 @@ static TASKBAR_CREATED: OnceLock<u32> = OnceLock::new();
 const TRAY_MESSAGE: u32 = WM_APP + 41;
 const SHOW_MESSAGE: u32 = WM_APP + 42;
 const PLACE_MESSAGE: u32 = WM_APP + 43;
+const PLACE_NOTIFICATION_MESSAGE: u32 = WM_APP + 44;
+const NOTIFICATION_SUBCLASS_ID: usize = 2;
+
+struct NotificationPlacement {
+    owner: HWND,
+    position: crate::settings::NotificationPosition,
+    width: f32,
+    height: f32,
+    title: String,
+    message: String,
+}
 
 pub struct Instance(HANDLE);
 impl Instance {
@@ -381,22 +392,11 @@ impl Shell {
 
     pub fn notify(&self, title: &str, message: &str) {
         let mut data = self.tray_data();
-        data.uFlags = NIF_INFO;
-        data.dwInfoFlags = NIIF_INFO;
-        for (out, value) in data
-            .szInfoTitle
-            .iter_mut()
-            .take(63)
-            .zip(title.encode_utf16())
-        {
-            *out = value;
-        }
-        for (out, value) in data.szInfo.iter_mut().take(255).zip(message.encode_utf16()) {
-            *out = value;
-        }
-        unsafe {
-            let _ = Shell_NotifyIconW(NIM_MODIFY, &data);
-        }
+        notify_icon(&mut data, title, message);
+    }
+
+    pub fn notification_owner(&self) -> usize {
+        self.hwnd.0 as usize
     }
 
     pub fn choose_files(&self) -> Result<()> {
@@ -599,6 +599,172 @@ impl Shell {
         }
     }
 }
+
+pub fn notify_owner(owner: usize, title: &str, message: &str) {
+    let mut data = NOTIFYICONDATAW {
+        cbSize: size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: HWND(owner as *mut _),
+        uID: 1,
+        ..Default::default()
+    };
+    notify_icon(&mut data, title, message);
+}
+
+fn notify_icon(data: &mut NOTIFYICONDATAW, title: &str, message: &str) {
+    data.uFlags = NIF_INFO;
+    data.dwInfoFlags = NIIF_INFO;
+    for (out, value) in data
+        .szInfoTitle
+        .iter_mut()
+        .take(63)
+        .zip(title.encode_utf16())
+    {
+        *out = value;
+    }
+    for (out, value) in data.szInfo.iter_mut().take(255).zip(message.encode_utf16()) {
+        *out = value;
+    }
+    unsafe {
+        let _ = Shell_NotifyIconW(NIM_MODIFY, data);
+    }
+}
+
+pub fn queue_notification_position(
+    owner: usize,
+    window: &gpui::Window,
+    position: crate::settings::NotificationPosition,
+    width: f32,
+    height: f32,
+    title: &str,
+    message: &str,
+) -> Result<()> {
+    let hwnd = hwnd(window)?;
+    let request = Box::new(NotificationPlacement {
+        owner: HWND(owner as *mut _),
+        position,
+        width,
+        height,
+        title: title.to_owned(),
+        message: message.to_owned(),
+    });
+    let request = Box::into_raw(request);
+    // SAFETY: both HWNDs belong to this UI thread; all Win32 structures remain
+    // live for their synchronous calls. The boxed placement request remains alive
+    // until the subclass handles WM_NCDESTROY.
+    unsafe {
+        if !SetWindowSubclass(
+            hwnd,
+            Some(notification_subclass),
+            NOTIFICATION_SUBCLASS_ID,
+            request as usize,
+        )
+        .as_bool()
+        {
+            drop(Box::from_raw(request));
+            bail!("注册桌面通知窗口回调失败");
+        }
+        if let Err(error) =
+            PostMessageW(Some(hwnd), PLACE_NOTIFICATION_MESSAGE, WPARAM(0), LPARAM(0))
+        {
+            let _ =
+                RemoveWindowSubclass(hwnd, Some(notification_subclass), NOTIFICATION_SUBCLASS_ID);
+            drop(Box::from_raw(request));
+            return Err(error).context("提交桌面通知定位消息失败");
+        }
+    }
+    Ok(())
+}
+
+unsafe extern "system" fn notification_subclass(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    subclass_id: usize,
+    reference_data: usize,
+) -> LRESULT {
+    if message == PLACE_NOTIFICATION_MESSAGE {
+        let placement = unsafe { &*(reference_data as *const NotificationPlacement) };
+        if let Err(error) = position_notification(hwnd, placement) {
+            eprintln!("无法定位 Windows 桌面通知：{error:#}");
+            notify_owner(
+                placement.owner.0 as usize,
+                &placement.title,
+                &placement.message,
+            );
+        }
+        return LRESULT(0);
+    }
+    if message == WM_NCDESTROY {
+        unsafe {
+            let _ = RemoveWindowSubclass(hwnd, Some(notification_subclass), subclass_id);
+            drop(Box::from_raw(reference_data as *mut NotificationPlacement));
+        }
+    }
+    unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
+}
+
+fn position_notification(hwnd: HWND, placement: &NotificationPlacement) -> Result<()> {
+    // SAFETY: the notification HWND and its owner HWND are live window handles;
+    // all Win32 structures remain on the stack for their synchronous calls.
+    unsafe {
+        let monitor_window = if IsWindow(Some(placement.owner)).as_bool() {
+            placement.owner
+        } else {
+            hwnd
+        };
+        let monitor = MonitorFromWindow(monitor_window, MONITOR_DEFAULTTONEAREST);
+        let mut info = MONITORINFO {
+            cbSize: size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        ensure!(
+            GetMonitorInfoW(monitor, &mut info).as_bool(),
+            "无法读取桌面通知所在显示器"
+        );
+        let scale = GetDpiForWindow(monitor_window).max(96) as f32 / 96.0;
+        let (width, height, margin) = (
+            (placement.width * scale).round() as i32,
+            (placement.height * scale).round() as i32,
+            (12.0 * scale).round() as i32,
+        );
+        crate::window_frame::configure_with_radius(hwnd, width, height, 16.0);
+        let work = info.rcWork;
+        let x = match placement.position {
+            crate::settings::NotificationPosition::TopLeft
+            | crate::settings::NotificationPosition::BottomLeft => work.left + margin,
+            crate::settings::NotificationPosition::TopRight
+            | crate::settings::NotificationPosition::BottomRight => work.right - width - margin,
+            crate::settings::NotificationPosition::TopCenter
+            | crate::settings::NotificationPosition::BottomCenter => {
+                work.left + (work.right - work.left - width) / 2
+            }
+        }
+        .max(work.left);
+        let y = match placement.position {
+            crate::settings::NotificationPosition::TopLeft
+            | crate::settings::NotificationPosition::TopRight => work.top + margin,
+            crate::settings::NotificationPosition::BottomLeft
+            | crate::settings::NotificationPosition::BottomRight => work.bottom - height - margin,
+            crate::settings::NotificationPosition::TopCenter => work.top + margin,
+            crate::settings::NotificationPosition::BottomCenter => work.bottom - height - margin,
+        }
+        .max(work.top);
+        SetWindowPos(
+            hwnd,
+            Some(HWND_TOPMOST),
+            x,
+            y,
+            width,
+            height,
+            SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        )
+        .context("定位 Windows 桌面通知失败")?;
+        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    }
+    Ok(())
+}
+
 impl Drop for Shell {
     fn drop(&mut self) {
         self.stop_drag_monitor.store(true, Ordering::Relaxed);

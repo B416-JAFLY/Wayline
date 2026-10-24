@@ -22,6 +22,53 @@ pub use transfer_history::{
 pub const MAX_NAME_CHARS: usize = 64;
 const MAX_SETTINGS_BYTES: u64 = 64 * 1024;
 const MAX_LANGUAGE_CODE_CHARS: usize = 16;
+const DEFAULT_DESKTOP_NOTIFICATIONS_ENABLED: bool = true;
+pub const NOTIFICATION_DURATION_OPTIONS: [u64; 6] = [3, 5, 8, 10, 15, 30];
+pub const DEFAULT_NOTIFICATION_DURATION_SECONDS: u64 = 8;
+
+/// Screen position used for the desktop receive notification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotificationPosition {
+    TopLeft,
+    TopCenter,
+    TopRight,
+    BottomLeft,
+    BottomCenter,
+    BottomRight,
+}
+
+impl NotificationPosition {
+    pub const DEFAULT: Self = Self::TopRight;
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::TopLeft => "top-left",
+            Self::TopCenter => "top-center",
+            Self::TopRight => "top-right",
+            Self::BottomLeft => "bottom-left",
+            Self::BottomCenter => "bottom-center",
+            Self::BottomRight => "bottom-right",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "top-left" => Ok(Self::TopLeft),
+            "top-center" => Ok(Self::TopCenter),
+            "top-right" => Ok(Self::TopRight),
+            "bottom-left" => Ok(Self::BottomLeft),
+            "bottom-center" => Ok(Self::BottomCenter),
+            "bottom-right" => Ok(Self::BottomRight),
+            _ => bail!("通知位置设置格式不正确"),
+        }
+    }
+}
+
+impl Default for NotificationPosition {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
 
 /// Structured name validation failures let localized front ends present their own text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,6 +197,105 @@ pub fn save_history_delete_files_to(path: &Path, delete_files: bool) -> Result<b
     settings.insert("history_delete_files".into(), Value::Bool(delete_files));
     write_settings(path, &settings)?;
     Ok(delete_files)
+}
+
+/// Load the corner used for desktop receive notifications.
+/// Missing settings use the upper-right corner as the desktop default.
+pub fn load_notification_position() -> Result<NotificationPosition> {
+    load_notification_position_from(&settings_path()?)
+}
+
+pub fn load_notification_position_from(path: &Path) -> Result<NotificationPosition> {
+    match read_settings(path)?.get("notification_position") {
+        None | Some(Value::Null) => Ok(NotificationPosition::DEFAULT),
+        Some(Value::String(position)) => NotificationPosition::parse(position),
+        _ => bail!("通知位置设置格式不正确"),
+    }
+}
+
+pub fn save_notification_position(position: NotificationPosition) -> Result<NotificationPosition> {
+    save_notification_position_to(&settings_path()?, position)
+}
+
+pub fn save_notification_position_to(
+    path: &Path,
+    position: NotificationPosition,
+) -> Result<NotificationPosition> {
+    let _guard = FileGuard::acquire(&path.with_extension("lock"))?;
+    let mut settings = read_settings(path)?;
+    settings.insert(
+        "notification_position".into(),
+        Value::String(position.as_str().into()),
+    );
+    write_settings(path, &settings)?;
+    Ok(position)
+}
+
+/// Load the desktop receive notification's automatic dismissal delay.
+/// Missing settings use eight seconds.
+pub fn load_notification_duration_seconds() -> Result<u64> {
+    load_notification_duration_seconds_from(&settings_path()?)
+}
+
+pub fn load_notification_duration_seconds_from(path: &Path) -> Result<u64> {
+    match read_settings(path)?.get("notification_duration_seconds") {
+        None | Some(Value::Null) => Ok(DEFAULT_NOTIFICATION_DURATION_SECONDS),
+        Some(Value::Number(seconds)) => {
+            let seconds = seconds.as_u64().context("通知消失时间设置格式不正确")?;
+            validate_notification_duration_seconds(seconds)
+        }
+        _ => bail!("通知消失时间设置格式不正确"),
+    }
+}
+
+pub fn save_notification_duration_seconds(seconds: u64) -> Result<u64> {
+    save_notification_duration_seconds_to(&settings_path()?, seconds)
+}
+
+pub fn save_notification_duration_seconds_to(path: &Path, seconds: u64) -> Result<u64> {
+    let seconds = validate_notification_duration_seconds(seconds)?;
+    let _guard = FileGuard::acquire(&path.with_extension("lock"))?;
+    let mut settings = read_settings(path)?;
+    settings.insert(
+        "notification_duration_seconds".into(),
+        Value::Number(seconds.into()),
+    );
+    write_settings(path, &settings)?;
+    Ok(seconds)
+}
+
+/// Whether successful receives should show a desktop notification.
+/// Missing settings preserve the existing enabled behavior.
+pub fn load_desktop_notifications_enabled() -> Result<bool> {
+    load_desktop_notifications_enabled_from(&settings_path()?)
+}
+
+pub fn load_desktop_notifications_enabled_from(path: &Path) -> Result<bool> {
+    match read_settings(path)?.get("desktop_notifications_enabled") {
+        None | Some(Value::Null) => Ok(DEFAULT_DESKTOP_NOTIFICATIONS_ENABLED),
+        Some(Value::Bool(enabled)) => Ok(*enabled),
+        _ => bail!("桌面通知开关设置格式不正确"),
+    }
+}
+
+pub fn save_desktop_notifications_enabled(enabled: bool) -> Result<bool> {
+    save_desktop_notifications_enabled_to(&settings_path()?, enabled)
+}
+
+pub fn save_desktop_notifications_enabled_to(path: &Path, enabled: bool) -> Result<bool> {
+    let _guard = FileGuard::acquire(&path.with_extension("lock"))?;
+    let mut settings = read_settings(path)?;
+    settings.insert("desktop_notifications_enabled".into(), Value::Bool(enabled));
+    write_settings(path, &settings)?;
+    Ok(enabled)
+}
+
+fn validate_notification_duration_seconds(seconds: u64) -> Result<u64> {
+    ensure!(
+        NOTIFICATION_DURATION_OPTIONS.contains(&seconds),
+        "通知消失时间必须是 3、5、8、10、15 或 30 秒"
+    );
+    Ok(seconds)
 }
 
 fn normalize_language(language: &str) -> Result<String> {
@@ -526,6 +672,144 @@ mod tests {
             assert!(load_language_from(&path).is_err());
         }
         assert!(save_language_to(&path, "").is_err());
+    }
+
+    #[test]
+    fn notification_position_defaults_and_preserves_other_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("desktop.json");
+        assert_eq!(
+            load_notification_position_from(&path).unwrap(),
+            NotificationPosition::TopRight
+        );
+        fs::write(&path, br#"{"future":{"x":1}}"#).unwrap();
+        assert_eq!(
+            save_notification_position_to(&path, NotificationPosition::TopRight).unwrap(),
+            NotificationPosition::TopRight
+        );
+        assert_eq!(
+            load_notification_position_from(&path).unwrap(),
+            NotificationPosition::TopRight
+        );
+        assert_eq!(read_settings(&path).unwrap()["future"]["x"], 1);
+        assert_eq!(
+            read_settings(&path).unwrap()["notification_position"],
+            "top-right"
+        );
+        for (position, serialized) in [
+            (NotificationPosition::TopLeft, "top-left"),
+            (NotificationPosition::TopCenter, "top-center"),
+            (NotificationPosition::TopRight, "top-right"),
+            (NotificationPosition::BottomLeft, "bottom-left"),
+            (NotificationPosition::BottomCenter, "bottom-center"),
+            (NotificationPosition::BottomRight, "bottom-right"),
+        ] {
+            save_notification_position_to(&path, position).unwrap();
+            assert_eq!(load_notification_position_from(&path).unwrap(), position);
+            assert_eq!(
+                read_settings(&path).unwrap()["notification_position"],
+                serialized
+            );
+        }
+    }
+
+    #[test]
+    fn notification_position_rejects_invalid_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("desktop.json");
+        for value in [
+            br#"{"notification_position":false}"#.as_slice(),
+            br#"{"notification_position":null}"#.as_slice(),
+            br#"{"notification_position":"center"}"#.as_slice(),
+        ] {
+            fs::write(&path, value).unwrap();
+            if value.ends_with(b"null}") {
+                assert_eq!(
+                    load_notification_position_from(&path).unwrap(),
+                    NotificationPosition::TopRight
+                );
+            } else {
+                assert!(load_notification_position_from(&path).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn notification_duration_defaults_preserves_other_settings_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("desktop.json");
+        assert_eq!(
+            load_notification_duration_seconds_from(&path).unwrap(),
+            DEFAULT_NOTIFICATION_DURATION_SECONDS
+        );
+        fs::write(&path, br#"{"future":{"x":1}}"#).unwrap();
+        for seconds in NOTIFICATION_DURATION_OPTIONS {
+            assert_eq!(
+                save_notification_duration_seconds_to(&path, seconds).unwrap(),
+                seconds
+            );
+            assert_eq!(
+                load_notification_duration_seconds_from(&path).unwrap(),
+                seconds
+            );
+        }
+        assert_eq!(read_settings(&path).unwrap()["future"]["x"], 1);
+    }
+
+    #[test]
+    fn notification_duration_rejects_invalid_values_and_types() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("desktop.json");
+        for seconds in [0, 1, 4, 6, 7, 9, 11, 29, 31, u64::MAX] {
+            assert!(save_notification_duration_seconds_to(&path, seconds).is_err());
+        }
+        for value in [
+            br#"{"notification_duration_seconds":false}"#.as_slice(),
+            br#"{"notification_duration_seconds":"8"}"#.as_slice(),
+            br#"{"notification_duration_seconds":4}"#.as_slice(),
+            br#"{"notification_duration_seconds":null}"#.as_slice(),
+        ] {
+            fs::write(&path, value).unwrap();
+            if value.ends_with(b"null}") {
+                assert_eq!(
+                    load_notification_duration_seconds_from(&path).unwrap(),
+                    DEFAULT_NOTIFICATION_DURATION_SECONDS
+                );
+            } else {
+                assert!(load_notification_duration_seconds_from(&path).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn desktop_notifications_enabled_defaults_preserves_other_settings_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("desktop.json");
+        assert!(load_desktop_notifications_enabled_from(&path).unwrap());
+        fs::write(&path, br#"{"future":{"x":1}}"#).unwrap();
+        assert!(!save_desktop_notifications_enabled_to(&path, false).unwrap());
+        assert!(!load_desktop_notifications_enabled_from(&path).unwrap());
+        assert!(save_desktop_notifications_enabled_to(&path, true).unwrap());
+        assert!(load_desktop_notifications_enabled_from(&path).unwrap());
+        assert_eq!(read_settings(&path).unwrap()["future"]["x"], 1);
+    }
+
+    #[test]
+    fn desktop_notifications_enabled_rejects_invalid_types_and_null_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("desktop.json");
+        for value in [
+            br#"{"desktop_notifications_enabled":"true"}"#.as_slice(),
+            br#"{"desktop_notifications_enabled":1}"#.as_slice(),
+            br#"{"desktop_notifications_enabled":null}"#.as_slice(),
+        ] {
+            fs::write(&path, value).unwrap();
+            if value.ends_with(b"null}") {
+                assert!(load_desktop_notifications_enabled_from(&path).unwrap());
+            } else {
+                assert!(load_desktop_notifications_enabled_from(&path).is_err());
+            }
+        }
     }
     #[test]
     fn saves_preserve_unknown_settings_and_corruption() {

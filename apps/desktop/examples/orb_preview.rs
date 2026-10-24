@@ -4,6 +4,7 @@
 //! Add --borderless to inspect the same transparent corners as the sharing card.
 //! Add --notice or --long-notice to inspect the dismissible notification layout.
 //! Add --expanded-notice to start with the full diagnostic details open.
+//! Add --position=top-left|top-right|bottom-left|bottom-right to inspect a corner.
 //! Add --long-content to stress the same scrolling content / pinned action layout as firmware.
 //! Add --check-layout to validate the 356 x 476 layout and exit without interaction.
 
@@ -39,6 +40,7 @@ use std::{
 struct PreviewNotice {
     message: String,
     full_text: String,
+    position: omdrop_host::NotificationPosition,
 }
 
 #[cfg(windows)]
@@ -148,8 +150,7 @@ impl Render for OrbPreview {
                     assert!(near(notice.size.height, px(expected_height)), "notice: {notice:?}");
                     assert!(inside(notice, viewport), "notice: {notice:?}");
                     assert!(!notice.intersects(&action), "notice {notice:?}, action {action:?}");
-                    assert!(content.bottom() <= notice.top(), "notice overlaps content");
-                    assert!(notice.bottom() <= footer.top(), "notice overlaps footer");
+                    assert!(!notice.intersects(&footer), "notice {notice:?}, footer {footer:?}");
                     println!("layout notice: {notice:?}");
                 }
                 println!("layout viewport: {viewport:?}; action: {action:?}; content: {content:?}; footer: {footer:?}");
@@ -159,6 +160,7 @@ impl Render for OrbPreview {
             })
             .id("orb-preview")
             .size_full()
+            .relative()
             .rounded(px(window_frame::CORNER_RADIUS))
             .bg(rgb(0x1c1c1f))
             .border_1()
@@ -273,7 +275,7 @@ impl Render for OrbPreview {
                     .into_any_element(),
             ))
             .children(self.notice.as_ref().map(|notice| {
-                share_layout::notice_banner(
+                share_layout::notice_overlay(
                     share_layout::NoticeContent {
                         id: 1,
                         message: notice.message.clone(),
@@ -284,6 +286,7 @@ impl Render for OrbPreview {
                         copy_label: "复制",
                         copied_label: "已复制",
                     },
+                    notice.position,
                     cx.listener(|this, hovered, _, cx| {
                         this.hover_notice(false, *hovered, cx);
                     }),
@@ -360,18 +363,35 @@ fn main() {
     let long_content = std::env::args().any(|arg| arg == "--long-content");
     let borderless = check_layout || std::env::args().any(|arg| arg == "--borderless");
     let notice_expanded = std::env::args().any(|arg| arg == "--expanded-notice");
+    let notice_position = std::env::args()
+        .find_map(|arg| arg.strip_prefix("--position=").map(str::to_owned))
+        .map(|position| match position.as_str() {
+            "top-left" => omdrop_host::NotificationPosition::TopLeft,
+            "top-center" => omdrop_host::NotificationPosition::TopCenter,
+            "top-right" => omdrop_host::NotificationPosition::TopRight,
+            "bottom-left" => omdrop_host::NotificationPosition::BottomLeft,
+            "bottom-center" => omdrop_host::NotificationPosition::BottomCenter,
+            "bottom-right" => omdrop_host::NotificationPosition::BottomRight,
+            _ => panic!("invalid --position value: {position}"),
+        })
+        .unwrap_or_default();
     let notice = if notice_expanded || std::env::args().any(|arg| arg == "--long-notice") {
         let message = "接收未完成：发送方连接中断，请重新发送。诊断：stage=HTTP body completion，received=6291456，total=unknown，content_type=application/x-dvzip，HTTP stage=ChunkHeader，chunk_remaining=0，socket idle timeout。".to_owned();
         let full_text = format!(
             "{message}\n\n完整诊断（模拟）：\n{}",
             "HTTP body completion: received=6291456, total=unknown, content_type=application/x-dvzip, stage=ChunkHeader, chunk_remaining=0, socket idle timeout.\n".repeat(8)
         );
-        Some(PreviewNotice { message, full_text })
+        Some(PreviewNotice {
+            message,
+            full_text,
+            position: notice_position,
+        })
     } else if std::env::args().any(|arg| arg == "--notice") {
         let message = "接收未完成：发送方连接中断，请重新发送。".to_owned();
         Some(PreviewNotice {
             full_text: message.clone(),
             message,
+            position: notice_position,
         })
     } else {
         None

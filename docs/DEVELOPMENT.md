@@ -173,14 +173,17 @@ Launch the UI normally so Explorer drag-and-drop works.
 | `--unregister-shell` | Remove the current user's Explorer and Send to entries after quitting |
 | `--version` | Print the version without GPUI or service initialization |
 
-Device name, receive directory, interface language and identity live under `%LOCALAPPDATA%\omdrop`.
+Device name, receive directory, interface language, notification position and identity live under `%LOCALAPPDATA%\omdrop`.
 `desktop.json` writes preserve unknown settings and use atomic replacement under a process lock.
 Identity creation and advertisement rename history in `receiver-services.json` are also locked.
 `download_directory` defaults to Downloads/Omdrop; changing it leaves existing files in place
 and is blocked during receiving. `language` stores `zh-CN`, `zh-TW`, `en-US`, `ja-JP`, `ko-KR`,
 `fr-FR`, `de-DE` or `es-ES`; when absent, Windows UI language selects it and unsupported locales
-fall back to English. Switching language updates the window, tray, system dialogs and
-notifications immediately and re-registers Explorer entries. UI copy lives in
+fall back to English. `desktop_notifications_enabled` controls the separate receive notification
+window and defaults to `true`. `notification_position` stores one of six screen positions and
+defaults to `top-right`; `notification_duration_seconds` stores an allowed delay of 3, 5, 8, 10,
+15 or 30 seconds and defaults to 8. The notification fades in and out. Switching
+language updates the window, tray, system dialogs and notifications immediately and re-registers Explorer entries. UI copy lives in
 `apps/desktop/locales/*.toml` (eight locales currently). `apps/desktop/build.rs` checks that every
 locale has the same keys and placeholders and generates the static copy table at build time.
 Adding a language requires a TOML file, a `Language` enum variant and an entry in the build list;

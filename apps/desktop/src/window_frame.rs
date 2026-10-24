@@ -19,6 +19,10 @@ fn is_draggable_header(x: f32, y: f32, width: f32, scale: f32) -> bool {
 
 /// Called on the owning UI thread before a frame-changing SetWindowPos.
 pub fn configure(hwnd: HWND, width: i32, height: i32) {
+    configure_with_radius(hwnd, width, height, CORNER_RADIUS);
+}
+
+pub fn configure_with_radius(hwnd: HWND, width: i32, height: i32, radius: f32) {
     // SAFETY: callers pass their live GPUI HWND on its owning thread. No driver
     // buffers or borrowed pointers survive any of these synchronous API calls.
     unsafe {
@@ -59,7 +63,7 @@ pub fn configure(hwnd: HWND, width: i32, height: i32) {
             // Preserve a usable shape if GPUI DirectComposition was explicitly
             // disabled: its opaque fallback cannot show transparent corners.
             let scale = GetDpiForWindow(hwnd).max(96) as f32 / 96.;
-            let diameter = (CORNER_RADIUS * 2. * scale).round() as i32;
+            let diameter = (radius * 2. * scale).round() as i32;
             let region = CreateRoundRectRgn(0, 0, width + 1, height + 1, diameter, diameter);
             if SetWindowRgn(hwnd, Some(region), true) == 0 {
                 let _ = DeleteObject(region.into());
