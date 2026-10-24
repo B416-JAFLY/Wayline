@@ -1,6 +1,6 @@
 //! Desktop UI copy and the persisted language preference.
-use omdrop_host::{NameError, TransferFormat};
 use std::sync::atomic::{AtomicU8, Ordering};
+use wayline_host::{NameError, TransferFormat};
 use windows::Win32::Globalization::GetUserDefaultUILanguage;
 
 /// The desktop and firmware expose the same three interface languages.

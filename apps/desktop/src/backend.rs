@@ -1,12 +1,4 @@
 use anyhow::{Context, Result, bail};
-use omdrop_core::{
-    DiscoveryEvent, Identity, NearbyReceiver, SendCancellation, SendEvent, SendFormat, SendOptions,
-};
-use omdrop_service::{
-    client::{Client, ClientConfig, ClientErrorKind},
-    protocol::Status,
-    session::{ClientLease, ReleaseOutcome, SessionKind},
-};
 use std::{
     path::PathBuf,
     sync::{
@@ -16,6 +8,14 @@ use std::{
     },
     thread::JoinHandle,
     time::{Duration, Instant},
+};
+use wayline_core::{
+    DiscoveryEvent, Identity, NearbyReceiver, SendCancellation, SendEvent, SendFormat, SendOptions,
+};
+use wayline_service::{
+    client::{Client, ClientConfig, ClientErrorKind},
+    protocol::Status,
+    session::{ClientLease, ReleaseOutcome, SessionKind},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,10 +55,10 @@ pub enum Event {
     Transfer(u64, SendEvent),
     SendDone(u64, Result<(), SendFailure>),
     ReceiverStatus(Result<(), String>),
-    ReceiverActivity(omdrop_core::ReceiverEvent),
-    HistoryLoaded(Result<Vec<omdrop_host::TransferHistoryRecord>, String>),
-    HistoryUpdated(Result<Vec<omdrop_host::TransferHistoryRecord>, String>),
-    HistoryDeleted(Result<Vec<omdrop_host::TransferHistoryRecord>, String>),
+    ReceiverActivity(wayline_core::ReceiverEvent),
+    HistoryLoaded(Result<Vec<wayline_host::TransferHistoryRecord>, String>),
+    HistoryUpdated(Result<Vec<wayline_host::TransferHistoryRecord>, String>),
+    HistoryDeleted(Result<Vec<wayline_host::TransferHistoryRecord>, String>),
     HistoryDeletePreferenceSaved(Result<bool, String>),
     HistoryFlushed,
     DownloadDirectorySaved(Result<PathBuf, String>),
@@ -103,16 +103,16 @@ pub enum SendFailure {
 impl From<anyhow::Error> for SendFailure {
     fn from(error: anyhow::Error) -> Self {
         match error
-            .downcast_ref::<omdrop_core::SendError>()
-            .map(omdrop_core::SendError::kind)
+            .downcast_ref::<wayline_core::SendError>()
+            .map(wayline_core::SendError::kind)
         {
-            Some(omdrop_core::TransferFailureKind::Declined) => Self::Declined,
-            Some(omdrop_core::TransferFailureKind::Cancelled) => Self::Cancelled,
-            Some(omdrop_core::TransferFailureKind::Connection) => Self::Connection(format!(
+            Some(wayline_core::TransferFailureKind::Declined) => Self::Declined,
+            Some(wayline_core::TransferFailureKind::Cancelled) => Self::Cancelled,
+            Some(wayline_core::TransferFailureKind::Connection) => Self::Connection(format!(
                 "{}{error:#}",
                 crate::i18n::current().strings().err_send_connection
             )),
-            Some(omdrop_core::TransferFailureKind::Validation) => Self::Validation(format!(
+            Some(wayline_core::TransferFailureKind::Validation) => Self::Validation(format!(
                 "{}{error:#}",
                 crate::i18n::current().strings().err_send_validation
             )),
@@ -123,7 +123,7 @@ impl From<anyhow::Error> for SendFailure {
 
 pub fn validate(id: u64, paths: Vec<PathBuf>, tx: Sender<Event>) {
     std::thread::spawn(move || {
-        let result = omdrop_core::validate_files(&paths).map_err(|error| error.to_string());
+        let result = wayline_core::validate_files(&paths).map_err(|error| error.to_string());
         let preview_paths: Vec<_> = if result.is_ok() {
             paths
                 .iter()
@@ -188,7 +188,7 @@ pub fn monitor(tx: Sender<Event>) -> Monitor {
             let status = (|| -> Result<LinkStatus> {
                 let text = crate::i18n::current().strings();
                 if lease.is_none() {
-                    omdrop_service::service_control::start().context(text.backend_start_failed)?;
+                    wayline_service::service_control::start().context(text.backend_start_failed)?;
                     lease = Some(
                         Client::default()
                             .acquire(SessionKind::Client)
@@ -291,7 +291,7 @@ pub fn shutdown(
 // A failed status request may already have dropped our last lease. Observe the
 // ensuing shutdown or release a fresh lease; never infer cleanup from disconnection.
 fn settle_service_session() -> Result<ReleaseOutcome, String> {
-    use omdrop_service::service_control::ServiceState;
+    use wayline_service::service_control::ServiceState;
     let deadline = Instant::now() + Duration::from_secs(30);
     let client = Client::new(ClientConfig {
         timeout: Duration::from_secs(3),
@@ -299,7 +299,7 @@ fn settle_service_session() -> Result<ReleaseOutcome, String> {
     })
     .map_err(|error| error.to_string())?;
     loop {
-        match omdrop_service::service_control::status() {
+        match wayline_service::service_control::status() {
             Ok(ServiceState::Stopped) => break,
             Err(error) if error.raw_os_error() == Some(1060) => break,
             Err(error) => {
@@ -389,7 +389,7 @@ impl Drop for UsageSession {
 }
 
 pub(super) fn identity(computer_name: &str) -> Result<Identity> {
-    omdrop_host::load_identity(computer_name)
+    wayline_host::load_identity(computer_name)
 }
 
 pub(super) fn prepare_network() -> Result<()> {
@@ -419,9 +419,9 @@ pub fn scan(
             let signal = cancel.clone();
             let _session = UsageSession::acquire(SessionKind::Client, move || signal.cancel())?;
             prepare_network()?;
-            let interface = omdrop_host::awdl_interface()?;
+            let interface = wayline_host::awdl_interface()?;
             let identity = identity(&sender_name)?;
-            omdrop_core::discover_receivers_live_cancellable(
+            wayline_core::discover_receivers_live_cancellable(
                 interface,
                 &identity,
                 Duration::from_secs(15),
@@ -463,7 +463,7 @@ pub fn send(
                 legacy_ble: false,
             };
             let mut last = Instant::now();
-            let result = omdrop_core::send_to_receiver_cancellable(
+            let result = wayline_core::send_to_receiver_cancellable(
                 &peer,
                 &identity,
                 &files,
@@ -510,7 +510,7 @@ mod tests {
             SendFailure::from(anyhow::anyhow!(message)),
             SendFailure::Failed(message.into())
         );
-        let network = omdrop_core::SendError::from(std::io::Error::new(
+        let network = wayline_core::SendError::from(std::io::Error::new(
             std::io::ErrorKind::TimedOut,
             "timed out",
         ));

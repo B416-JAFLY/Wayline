@@ -1,9 +1,3 @@
-use omdrop_awdl::{
-    driver,
-    serial::Radio,
-    windows::{feedback, wintun::Wintun},
-    MacAddr,
-};
 use std::{
     ffi::OsString,
     fs, io,
@@ -12,6 +6,12 @@ use std::{
     time::Duration,
 };
 use tokio::sync::watch;
+use wayline_awdl::{
+    driver,
+    serial::Radio,
+    windows::{feedback, wintun::Wintun},
+    MacAddr,
+};
 use windows_sys::Win32::{
     Foundation::{WAIT_FAILED, WAIT_OBJECT_0},
     System::Threading::{OpenEventW, WaitForSingleObject, SYNCHRONIZATION_SYNCHRONIZE},
@@ -31,14 +31,14 @@ impl Options {
         while let Some(arg) = args.next() {
             match arg.to_str() {
                 Some("--help" | "-h") => {
-                    println!("omdrop-bridge --port COM<n> [--channel 6|44|149] [--managed]\nRequires the verified wintun.dll beside the executable. --managed is for service launches.");
+                    println!("wayline-bridge --port COM<n> [--channel 6|44|149] [--managed]\nRequires the verified wintun.dll beside the executable. --managed is for service launches.");
                     return Ok(None);
                 }
                 Some("--port") => {
                     let value = args
                         .next()
                         .ok_or_else(|| invalid("--port requires a value"))?;
-                    port = Some(omdrop_service::config::normalize_port(
+                    port = Some(wayline_service::config::normalize_port(
                         value.to_str().ok_or_else(|| invalid("invalid port"))?,
                     )?);
                 }
@@ -77,7 +77,7 @@ fn invalid(message: impl Into<String>) -> io::Error {
 struct StopEvent(OwnedHandle);
 impl StopEvent {
     fn open() -> io::Result<Option<Self>> {
-        let Some(name) = std::env::var_os("OMDROP_BRIDGE_STOP_EVENT") else {
+        let Some(name) = std::env::var_os("WAYLINE_BRIDGE_STOP_EVENT") else {
             return Ok(None);
         };
         use std::os::windows::ffi::OsStrExt;
@@ -122,11 +122,11 @@ pub fn main() -> io::Result<()> {
     let _guard = if options.managed {
         None
     } else {
-        Some(omdrop_service::device_lock::DeviceGuard::try_acquire(
+        Some(wayline_service::device_lock::DeviceGuard::try_acquire(
             &options.port,
         )?)
     };
-    if omdrop_service::device_lock::has_failed(&options.port)? {
+    if wayline_service::device_lock::has_failed(&options.port)? {
         return Err(io::Error::other(
             "device readiness is unconfirmed; complete firmware maintenance before starting AWDL",
         ));
@@ -135,14 +135,14 @@ pub fn main() -> io::Result<()> {
     if !dll.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
-            "verified wintun.dll is required beside omdrop-bridge.exe",
+            "verified wintun.dll is required beside wayline-bridge.exe",
         ));
     }
     tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(async move {
         let stopping = wait_for_stop(&stop);
         tokio::pin!(stopping);
-        let target_file = std::env::var_os("OMDROP_BRIDGE_TARGET_FILE").map(std::path::PathBuf::from);
-        let publish_target = move |hello: &omdrop_awdl::serial::Hello| {
+        let target_file = std::env::var_os("WAYLINE_BRIDGE_TARGET_FILE").map(std::path::PathBuf::from);
+        let publish_target = move |hello: &wayline_awdl::serial::Hello| {
             if let Some(path) = target_file.as_deref() {
                 publish_radio_target(path, &hello.target)?;
             }
@@ -152,7 +152,7 @@ pub fn main() -> io::Result<()> {
             result=Radio::open_with_target(&options.port,options.channel,publish_target)=>result?,
             result=&mut stopping=>return result,
         };
-        let config=omdrop_awdl::configuration(hello.mac,"Omdrop",&hello.target,options.channel)?;
+        let config=wayline_awdl::configuration(hello.mac,"Wayline",&hello.target,options.channel)?;
         let control=radio.control();
         let (peers,_)=watch::channel(Vec::new());
         let running=driver::spawn(config,move || {

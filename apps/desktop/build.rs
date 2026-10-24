@@ -21,7 +21,7 @@ fn main() {
     // build error rather than an application that starts without a tray icon.
     embed_resource::compile("assets/app.rc", embed_resource::NONE)
         .manifest_required()
-        .expect("compile Omdrop Windows icon resources");
+        .expect("compile Wayline Windows icon resources");
 }
 
 /// Compile the TOML locale files into a typed table with static strings.

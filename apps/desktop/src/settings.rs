@@ -1,5 +1,5 @@
 //! UI-facing names for the shared per-user host preferences.
-pub use omdrop_host::{
+pub use wayline_host::{
     DEFAULT_NOTIFICATION_DURATION_SECONDS, MAX_NAME_CHARS, NOTIFICATION_DURATION_OPTIONS,
     NotificationPosition, default_name, load_desktop_notifications_enabled, load_language,
     load_name as load, load_notification_duration_seconds, load_notification_position,

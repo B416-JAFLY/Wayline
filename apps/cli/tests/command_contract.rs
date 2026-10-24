@@ -2,7 +2,7 @@
 use std::process::{Command, Stdio};
 
 fn invoke(args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_omdrop-cli"))
+    Command::new(env!("CARGO_BIN_EXE_wayline-cli"))
         .args(args)
         .stdin(Stdio::null())
         .output()
@@ -15,7 +15,7 @@ fn version_has_no_diagnostic_or_terminal_event() {
     assert!(output.status.success());
     assert_eq!(
         String::from_utf8(output.stdout).unwrap().trim(),
-        concat!("omdrop-cli ", env!("CARGO_PKG_VERSION"))
+        concat!("wayline-cli ", env!("CARGO_PKG_VERSION"))
     );
     assert!(output.stderr.is_empty());
 }

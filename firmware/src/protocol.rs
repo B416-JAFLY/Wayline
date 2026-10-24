@@ -1,6 +1,6 @@
 //! Allocation-free protocol policy. No ESP-IDF types cross this boundary.
 
-use omdrop_proto::{
+use wayline_proto::{
     decode_frame_in_place, encode_frame_parts, CodecError, FilterMode, HostMessage, COBS_MAX,
     PROTO_MAX_FRAME, PROTO_VERSION, RATE_MCS, RAW_MAX,
 };
@@ -48,7 +48,7 @@ pub fn parse_command(message: &[u8]) -> Result<Command<'_>, i32> {
         HostMessage::Stats if body == b"UP" => Command::UplinkStatus,
         HostMessage::Stats => Command::Stats,
         HostMessage::Transfer => {
-            use omdrop_proto::transfer::{Transfer, FRAME_LEN, HEADER_LEN};
+            use wayline_proto::transfer::{Transfer, FRAME_LEN, HEADER_LEN};
             if body.len() != FRAME_LEN {
                 return Err(INVALID_SIZE);
             }

@@ -1,5 +1,5 @@
 //! Two independent file-transfer lanes with finite leases and late-message protection.
-use omdrop_proto::transfer::{Phase, Reason, Transfer, FRAME_LEN, HEADER_LEN, LABEL_LEN};
+use wayline_proto::transfer::{Phase, Reason, Transfer, FRAME_LEN, HEADER_LEN, LABEL_LEN};
 
 #[derive(Clone, Copy)]
 pub struct Lane {

@@ -8,12 +8,12 @@ use crate::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use omdrop_core::SendCancellation;
 use std::{
     path::PathBuf,
     sync::mpsc,
     time::{Duration, Instant},
 };
+use wayline_core::SendCancellation;
 
 const BLUE: u32 = 0x0a84ff;
 const INK: u32 = 0xf5f5f7;
@@ -26,7 +26,7 @@ enum ExitState {
 }
 
 struct HistoryDeletion {
-    records: Vec<omdrop_host::TransferHistoryRecord>,
+    records: Vec<wayline_host::TransferHistoryRecord>,
     delete_files: bool,
     remember: bool,
 }
@@ -44,15 +44,15 @@ pub struct Capsule {
     workers: Vec<std::thread::JoinHandle<()>>,
     history_thread: Option<std::thread::JoinHandle<()>>,
     firmware: crate::firmware::Model,
-    firmware_cancel: Option<omdrop_flash::Cancellation>,
+    firmware_cancel: Option<wayline_flash::Cancellation>,
     firmware_worker: Option<std::thread::JoinHandle<()>>,
     picker_open: bool,
     name_input: Option<Entity<crate::name_input::NameInput>>,
     name_input_subscription: Option<Subscription>,
     settings_open: bool,
     history_open: bool,
-    history: Vec<omdrop_host::TransferHistoryRecord>,
-    history_detail: Option<omdrop_host::TransferHistoryRecord>,
+    history: Vec<wayline_host::TransferHistoryRecord>,
+    history_detail: Option<wayline_host::TransferHistoryRecord>,
     history_loaded: bool,
     history_error: Option<String>,
     history_preference_error: Option<String>,
@@ -106,7 +106,7 @@ impl Capsule {
         if let Some(error) = language_error {
             settings_error = Some(format!("{}{error}", text.err_language_load));
         }
-        let history_delete_files = match omdrop_host::load_history_delete_files() {
+        let history_delete_files = match wayline_host::load_history_delete_files() {
             Ok(value) => value,
             Err(error) => {
                 settings_error = Some(format!(
@@ -298,7 +298,7 @@ impl Capsule {
                             self.receive
                                 .history_record_for_event(&event, event_at, event_unix_ms);
                         let received_files = match &event {
-                            omdrop_core::ReceiverEvent::Received { files, .. } => files.clone(),
+                            wayline_core::ReceiverEvent::Received { files, .. } => files.clone(),
                             _ => Vec::new(),
                         };
                         if self.receive.apply_at(&event, event_at, event_unix_ms)
@@ -529,7 +529,7 @@ impl Capsule {
                     continue;
                 }
                 Event::ReceiverActivity(event) => {
-                    if let omdrop_core::ReceiverEvent::ModeSelected(_) = &event {
+                    if let wayline_core::ReceiverEvent::ModeSelected(_) = &event {
                         let _ = self.receive.apply_at(&event, event_at, event_unix_ms);
                         changed = true;
                         continue;
@@ -538,7 +538,7 @@ impl Capsule {
                         self.receive
                             .history_record_for_event(&event, event_at, event_unix_ms);
                     let received_files = match &event {
-                        omdrop_core::ReceiverEvent::Received { files, .. } => files.clone(),
+                        wayline_core::ReceiverEvent::Received { files, .. } => files.clone(),
                         _ => Vec::new(),
                     };
                     let applied = self.receive.apply_at(&event, event_at, event_unix_ms);
@@ -549,7 +549,7 @@ impl Capsule {
                         worker.append(record, received_files);
                     }
                     if applied
-                        && matches!(event, omdrop_core::ReceiverEvent::Received { .. })
+                        && matches!(event, wayline_core::ReceiverEvent::Received { .. })
                         && let Some(notice) = &self.receive.notice
                     {
                         self.show_desktop_notification(
@@ -662,7 +662,7 @@ impl Capsule {
                         Ok(Some(directory)) => {
                             let events = self.tx.clone();
                             self.workers.push(std::thread::spawn(move || {
-                                let result = omdrop_host::save_download_dir(&directory)
+                                let result = wayline_host::save_download_dir(&directory)
                                     .map_err(|error| format!("{error:#}"));
                                 let _ = events.send(Event::DownloadDirectorySaved(result));
                             }));
@@ -1040,7 +1040,7 @@ impl Capsule {
             }
             Err(error) => {
                 self.settings_error =
-                    Some(error.downcast_ref::<omdrop_host::NameError>().map_or_else(
+                    Some(error.downcast_ref::<wayline_host::NameError>().map_or_else(
                         || format!("{}{error:#}", self.language.strings().err_saving_name),
                         |kind| self.language.name_error(*kind),
                     ))
@@ -1195,7 +1195,7 @@ impl Capsule {
 
     fn request_history_deletion(
         &mut self,
-        records: Vec<omdrop_host::TransferHistoryRecord>,
+        records: Vec<wayline_host::TransferHistoryRecord>,
         cx: &mut Context<Self>,
     ) {
         if records.is_empty() || self.history_deleting || self.history_preference_pending {
@@ -1340,7 +1340,7 @@ impl Capsule {
                         div()
                             .text_size(px(14.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child("Omdrop"),
+                            .child("Wayline"),
                     )
                     .child(
                         div()
@@ -1435,7 +1435,7 @@ impl Capsule {
                                 div()
                                     .text_size(px(17.))
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .child("Omdrop"),
+                                    .child("Wayline"),
                             ),
                     )
                     .child(div().id("window-drag-spacer").flex_1().min_w_0().h(px(28.)))
@@ -1759,8 +1759,8 @@ impl Capsule {
             return;
         }
         let board = self.firmware.package.as_ref().unwrap().board.clone();
-        let paths = omdrop_flash::installed_manifest_for_board(&board)
-            .and_then(|manifest| Ok((manifest, omdrop_flash::installed_tool()?)));
+        let paths = wayline_flash::installed_manifest_for_board(&board)
+            .and_then(|manifest| Ok((manifest, wayline_flash::installed_tool()?)));
         let (manifest_path, tool_path) = match paths {
             Ok(paths) => paths,
             Err(error) => {
@@ -1782,9 +1782,9 @@ impl Capsule {
         self.firmware.cancelling = false;
         self.firmware.error = None;
         self.firmware.message = self.language.strings().firmware_prepare_maintenance.into();
-        let cancel = omdrop_flash::Cancellation::default();
+        let cancel = wayline_flash::Cancellation::default();
         self.firmware_cancel = Some(cancel.clone());
-        let options = omdrop_flash::FlashOptions {
+        let options = wayline_flash::FlashOptions {
             manifest_path,
             tool_path,
             port: self.firmware.selected.clone().unwrap(),
@@ -1819,7 +1819,7 @@ impl Capsule {
                             .child(self.firmware.package.as_ref().map_or_else(
                                 || text.firmware_install.to_string(),
                                 |package| {
-                                    omdrop_flash::profile_for_board(&package.board).map_or_else(
+                                    wayline_flash::profile_for_board(&package.board).map_or_else(
                                         || package.board.clone(),
                                         |profile| profile.label.into(),
                                     )
@@ -1854,7 +1854,7 @@ impl Capsule {
                     .package
                     .as_ref()
                     .is_some_and(|current| current.board == board);
-                let label = omdrop_flash::profile_for_board(&board)
+                let label = wayline_flash::profile_for_board(&board)
                     .map_or_else(|| board.clone(), |profile| profile.label.into());
                 profiles = profiles.child(
                     div()
@@ -2120,18 +2120,18 @@ impl Capsule {
         {
             body = body.child(firmware_hint(text.firmware_profile_mismatch, 0xffb56b));
         }
-        let upgrade = self.firmware.mode == omdrop_flash::InstallMode::Upgrade;
+        let upgrade = self.firmware.mode == wayline_flash::InstallMode::Upgrade;
         let mut mode_buttons = div().flex().gap(px(6.));
         for (id, label, mode) in [
             (
                 "firmware-upgrade",
                 text.firmware_keep_settings,
-                omdrop_flash::InstallMode::Upgrade,
+                wayline_flash::InstallMode::Upgrade,
             ),
             (
                 "firmware-reinstall",
                 text.firmware_reinstall,
-                omdrop_flash::InstallMode::Reinstall,
+                wayline_flash::InstallMode::Reinstall,
             ),
         ] {
             let selected = self.firmware.mode == mode;
@@ -3226,7 +3226,7 @@ impl Capsule {
     }
 
     fn history_view(&self, cx: &mut Context<Self>) -> AnyElement {
-        use omdrop_host::{TransferDirection, TransferOutcome};
+        use wayline_host::{TransferDirection, TransferOutcome};
         let text = self.language.strings();
         if let Some(deletion) = &self.history_deletion {
             return self.history_delete_view(deletion, cx);
@@ -3413,10 +3413,10 @@ impl Capsule {
 
     fn history_detail_view(
         &self,
-        record: &omdrop_host::TransferHistoryRecord,
+        record: &wayline_host::TransferHistoryRecord,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        use omdrop_host::{TransferDirection, TransferFailureReason, TransferOutcome};
+        use wayline_host::{TransferDirection, TransferFailureReason, TransferOutcome};
         let text = self.language.strings();
         let direction = match record.direction {
             TransferDirection::Send => text.history_direction_send,

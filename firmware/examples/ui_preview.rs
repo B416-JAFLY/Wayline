@@ -1,8 +1,8 @@
 //! Export the exact device renderer without hardware: cargo run --features cardputer-ui --example ui_preview -- <out-dir>
-use omdrop_proto::transfer::{Phase, Reason, Transfer, FRAME_LEN, HEADER_LEN};
 use owl_radio_rust_link::ui::{render, Canvas, Preferences, UiState, HEIGHT, WIDTH};
 use owl_radio_rust_link::{feedback::Feedback, ui::render_with_transfers};
 use std::{fs, io::Write, path::Path};
+use wayline_proto::transfer::{Phase, Reason, Transfer, FRAME_LEN, HEADER_LEN};
 
 const FRAME_MS: u32 = 50;
 const SETTLE_MS: u32 = 600;

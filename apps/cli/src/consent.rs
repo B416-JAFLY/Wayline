@@ -1,5 +1,4 @@
 //! One terminal reader, a bounded offer queue, and fail-closed decisions.
-use omdrop_core::{IncomingTransfer, SendCancellation};
 use std::{
     io::{self, BufRead, Write},
     path::PathBuf,
@@ -11,6 +10,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use wayline_core::{IncomingTransfer, SendCancellation};
 
 struct Prompt {
     transfer: IncomingTransfer,

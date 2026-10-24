@@ -235,7 +235,7 @@ extern "C" uint32_t radio_ui_load_preferences(void)
 {
     nvs_handle_t handle;
     uint32_t value = 0; // Rust validates the version/fields and supplies defaults.
-    if (nvs_open("omdrop-ui", NVS_READONLY, &handle) == ESP_OK) {
+    if (nvs_open("wayline-ui", NVS_READONLY, &handle) == ESP_OK) {
         (void)nvs_get_u32(handle, "preferences", &value);
         nvs_close(handle);
     }
@@ -245,7 +245,7 @@ extern "C" uint32_t radio_ui_load_preferences(void)
 extern "C" bool radio_ui_save_preferences(uint32_t preferences)
 {
     nvs_handle_t handle;
-    if (nvs_open("omdrop-ui", NVS_READWRITE, &handle) != ESP_OK)
+    if (nvs_open("wayline-ui", NVS_READWRITE, &handle) != ESP_OK)
         return false;
     esp_err_t error = nvs_set_u32(handle, "preferences", preferences);
     if (error == ESP_OK)

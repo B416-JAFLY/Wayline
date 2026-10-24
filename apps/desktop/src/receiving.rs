@@ -1,11 +1,6 @@
 //! Background receiver owned by the desktop, including while its window is hidden.
 use crate::backend::{self, Event};
 use anyhow::Result;
-use omdrop_core::{IncomingTransfer, ReceiverCore, ReceiverEvent, ReceiverOptions};
-use omdrop_host::{
-    TransferDirection, TransferFailureReason, TransferFormat, TransferHistoryRecord,
-    TransferOutcome,
-};
 use std::{
     io::Write,
     path::PathBuf,
@@ -16,6 +11,11 @@ use std::{
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
+};
+use wayline_core::{IncomingTransfer, ReceiverCore, ReceiverEvent, ReceiverOptions};
+use wayline_host::{
+    TransferDirection, TransferFailureReason, TransferFormat, TransferHistoryRecord,
+    TransferOutcome,
 };
 
 pub struct IncomingRequest {
@@ -34,7 +34,7 @@ impl IncomingRequest {
 }
 
 pub fn save_directory() -> Result<PathBuf> {
-    omdrop_host::download_dir()
+    wayline_host::download_dir()
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -340,8 +340,8 @@ impl Model {
         match event {
             ReceiverEvent::ModeSelected(format) => {
                 active.format = Some(match format {
-                    omdrop_core::TransferFormat::Gzip => TransferFormat::Gzip,
-                    omdrop_core::TransferFormat::DvZip => TransferFormat::DvZip,
+                    wayline_core::TransferFormat::Gzip => TransferFormat::Gzip,
+                    wayline_core::TransferFormat::DvZip => TransferFormat::DvZip,
                 });
             }
             ReceiverEvent::Receiving {
@@ -387,10 +387,10 @@ impl Model {
             } if transfer_id == &active.id => {
                 let text = crate::i18n::current().strings();
                 let message = match kind {
-                    omdrop_core::TransferFailureKind::Cancelled => text.receive_cancelled,
-                    omdrop_core::TransferFailureKind::Declined => text.receive_declined_notice,
-                    omdrop_core::TransferFailureKind::Validation => text.receive_validation,
-                    omdrop_core::TransferFailureKind::Connection => text.receive_connection,
+                    wayline_core::TransferFailureKind::Cancelled => text.receive_cancelled,
+                    wayline_core::TransferFailureKind::Declined => text.receive_declined_notice,
+                    wayline_core::TransferFailureKind::Validation => text.receive_validation,
+                    wayline_core::TransferFailureKind::Connection => text.receive_connection,
                     _ => text.receive_failed,
                 };
                 self.finished_elapsed = active.elapsed(now);
@@ -422,19 +422,21 @@ impl Model {
                 transfer_id, kind, ..
             } => {
                 let (outcome, reason) = match kind {
-                    omdrop_core::TransferFailureKind::Declined => (TransferOutcome::Declined, None),
-                    omdrop_core::TransferFailureKind::Cancelled => {
+                    wayline_core::TransferFailureKind::Declined => {
+                        (TransferOutcome::Declined, None)
+                    }
+                    wayline_core::TransferFailureKind::Cancelled => {
                         (TransferOutcome::Cancelled, None)
                     }
-                    omdrop_core::TransferFailureKind::Connection => (
+                    wayline_core::TransferFailureKind::Connection => (
                         TransferOutcome::Failed,
                         Some(TransferFailureReason::Connection),
                     ),
-                    omdrop_core::TransferFailureKind::Validation => (
+                    wayline_core::TransferFailureKind::Validation => (
                         TransferOutcome::Failed,
                         Some(TransferFailureReason::Validation),
                     ),
-                    omdrop_core::TransferFailureKind::Other => {
+                    wayline_core::TransferFailureKind::Other => {
                         (TransferOutcome::Failed, Some(TransferFailureReason::Other))
                     }
                 };
@@ -699,19 +701,19 @@ fn run(
     shared_core: Arc<Mutex<Weak<ReceiverCore>>>,
 ) -> Result<()> {
     let signal = stop.clone();
-    let _session =
-        backend::UsageSession::acquire(omdrop_service::session::SessionKind::Receive, move || {
-            signal.store(true, Ordering::Release)
-        })?;
+    let _session = backend::UsageSession::acquire(
+        wayline_service::session::SessionKind::Receive,
+        move || signal.store(true, Ordering::Release),
+    )?;
     backend::prepare_network()?;
     if stop.load(Ordering::Acquire) {
         return Ok(());
     }
-    let interface = omdrop_host::awdl_interface()?;
+    let interface = wayline_host::awdl_interface()?;
     let identity = backend::identity(name)?;
-    let advertisement = omdrop_host::receiver_advertisement(&identity, name)?;
+    let advertisement = wayline_host::receiver_advertisement(&identity, name)?;
     let service_id = advertisement.service_id;
-    let config = omdrop_core::server_config(&identity)?;
+    let config = wayline_core::server_config(&identity)?;
     let directory = save_directory()?;
     std::fs::create_dir_all(&directory)?;
     let mut options = ReceiverOptions::new(name, "Windows", &directory);
@@ -751,7 +753,7 @@ fn run(
                 Event::ReceiverActivity(ReceiverEvent::TransferFailed {
                     transfer_id: transfer.id.clone(),
                     error: crate::i18n::current().strings().incoming_expired.into(),
-                    kind: omdrop_core::TransferFailureKind::Cancelled,
+                    kind: wayline_core::TransferFailureKind::Cancelled,
                 })
                 .timestamped(),
             );
@@ -837,7 +839,7 @@ fn wait_for_decision(answer: mpsc::Receiver<bool>, stop: &AtomicBool, expires: I
 fn log(message: &str) {
     if let Some(directory) = std::env::var_os("LOCALAPPDATA") {
         let path = PathBuf::from(directory)
-            .join("omdrop")
+            .join("wayline")
             .join("desktop-receiver.log");
         if let Ok(mut file) = std::fs::OpenOptions::new()
             .create(true)
@@ -932,18 +934,18 @@ mod tests {
             assert!(!model.apply(&ReceiverEvent::ConnectionFailed {
                 peer: "[::1]:8771".parse().unwrap(),
                 error: "unrelated discovery".into(),
-                kind: omdrop_core::TransferFailureKind::Connection,
+                kind: wayline_core::TransferFailureKind::Connection,
             }));
             assert!(!model.apply(&ReceiverEvent::TransferFailed {
                 transfer_id: "old".into(),
                 error: "old error".into(),
-                kind: omdrop_core::TransferFailureKind::Connection,
+                kind: wayline_core::TransferFailureKind::Connection,
             }));
             assert!(model.active.is_some());
             assert!(model.apply(&ReceiverEvent::TransferFailed {
                 transfer_id: "current".into(),
                 error: "upload stage=archive decoding; internal diagnostic detail".repeat(1000),
-                kind: omdrop_core::TransferFailureKind::Connection,
+                kind: wayline_core::TransferFailureKind::Connection,
             }));
             assert!(model.active.is_none());
             let notice = model.notice.as_ref().unwrap();
@@ -997,7 +999,7 @@ mod tests {
                     &ReceiverEvent::TransferFailed {
                         transfer_id: "old-transfer".into(),
                         error: "ignored".into(),
-                        kind: omdrop_core::TransferFailureKind::Connection,
+                        kind: wayline_core::TransferFailureKind::Connection,
                     },
                     now,
                     100,
@@ -1009,7 +1011,7 @@ mod tests {
                 &ReceiverEvent::TransferFailed {
                     transfer_id: offer.id.clone(),
                     error: "private diagnostic detail".into(),
-                    kind: omdrop_core::TransferFailureKind::Connection,
+                    kind: wayline_core::TransferFailureKind::Connection,
                 },
                 now,
                 200,
@@ -1027,7 +1029,7 @@ mod tests {
     #[test]
     fn receive_elapsed_excludes_acceptance_wait_and_freezes_when_finished() {
         let mut offer = transfer("timed");
-        offer.files.push(omdrop_core::IncomingFile {
+        offer.files.push(wayline_core::IncomingFile {
             name: "photo.png".into(),
             kind: "public.png".into(),
             size: Some(100),
@@ -1103,7 +1105,7 @@ mod tests {
         let event = ReceiverEvent::TransferFailed {
             transfer_id: offer.id,
             error: "cancelled".into(),
-            kind: omdrop_core::TransferFailureKind::Cancelled,
+            kind: wayline_core::TransferFailureKind::Cancelled,
         };
         let record = model
             .history_record_for_event(&event, Instant::now() + Duration::from_secs(60), u64::MAX)
@@ -1276,7 +1278,7 @@ mod tests {
             "upload stage=archive decoding; received=123; HTTP=ChunkHeader: socket timeout";
         model.apply(&ReceiverEvent::TransferFailed {
             transfer_id: "current".into(),
-            kind: omdrop_core::TransferFailureKind::Connection,
+            kind: wayline_core::TransferFailureKind::Connection,
             error: diagnostic.into(),
         });
         let notice = model.notice.as_ref().unwrap();

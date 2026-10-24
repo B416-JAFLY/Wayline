@@ -1,5 +1,5 @@
 //! Hardware-free preview of the desktop connection orb and sharing-card layout.
-//! Run `cargo run -p omdrop-desktop --example orb_preview --locked` on Windows.
+//! Run `cargo run -p wayline-desktop --example orb_preview --locked` on Windows.
 //! Click the button or press Space to toggle connection; press Esc to quit.
 //! Add --borderless to inspect the same transparent corners as the sharing card.
 //! Add --notice or --long-notice to inspect the dismissible notification layout.
@@ -40,7 +40,7 @@ use std::{
 struct PreviewNotice {
     message: String,
     full_text: String,
-    position: omdrop_host::NotificationPosition,
+    position: wayline_host::NotificationPosition,
 }
 
 #[cfg(windows)]
@@ -197,7 +197,7 @@ impl Render for OrbPreview {
                                 div()
                                     .text_size(px(17.))
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .child("Omdrop"),
+                                    .child("Wayline"),
                             ),
                     )
                     .child(
@@ -366,12 +366,12 @@ fn main() {
     let notice_position = std::env::args()
         .find_map(|arg| arg.strip_prefix("--position=").map(str::to_owned))
         .map(|position| match position.as_str() {
-            "top-left" => omdrop_host::NotificationPosition::TopLeft,
-            "top-center" => omdrop_host::NotificationPosition::TopCenter,
-            "top-right" => omdrop_host::NotificationPosition::TopRight,
-            "bottom-left" => omdrop_host::NotificationPosition::BottomLeft,
-            "bottom-center" => omdrop_host::NotificationPosition::BottomCenter,
-            "bottom-right" => omdrop_host::NotificationPosition::BottomRight,
+            "top-left" => wayline_host::NotificationPosition::TopLeft,
+            "top-center" => wayline_host::NotificationPosition::TopCenter,
+            "top-right" => wayline_host::NotificationPosition::TopRight,
+            "bottom-left" => wayline_host::NotificationPosition::BottomLeft,
+            "bottom-center" => wayline_host::NotificationPosition::BottomCenter,
+            "bottom-right" => wayline_host::NotificationPosition::BottomRight,
             _ => panic!("invalid --position value: {position}"),
         })
         .unwrap_or_default();
@@ -402,7 +402,7 @@ fn main() {
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
-                    title: Some("Omdrop · 球形点阵预览".into()),
+                    title: Some("Wayline · 球形点阵预览".into()),
                     ..Default::default()
                 }),
                 is_resizable: false,

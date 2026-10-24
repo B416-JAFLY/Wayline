@@ -1,6 +1,6 @@
 //! Radio filtering, counters, peer tracking and keyboard policy, independent of drivers.
 
-use omdrop_proto::FilterMode;
+use wayline_proto::FilterMode;
 
 pub const PEER_MAX: usize = 4;
 const APPLE_OUI: &[u8] = &[0x00, 0x17, 0xf2];

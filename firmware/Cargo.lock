@@ -3,12 +3,12 @@
 version = 4
 
 [[package]]
-name = "omdrop-proto"
-version = "0.1.0"
-
-[[package]]
 name = "owl-radio-rust-link"
 version = "0.1.0"
 dependencies = [
- "omdrop-proto",
+ "wayline-proto",
 ]
+
+[[package]]
+name = "wayline-proto"
+version = "0.1.0"

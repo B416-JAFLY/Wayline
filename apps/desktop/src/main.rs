@@ -53,18 +53,18 @@ fn main() -> anyhow::Result<()> {
             .nth(1)
             .is_some_and(|arg| arg == "--version")
     {
-        println!("omdrop-desktop {}", env!("CARGO_PKG_VERSION"));
+        println!("wayline-desktop {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
     let launch = match integration::Mode::parse(std::env::args_os().skip(1))? {
         integration::Mode::Service => {
             // Session 0 must never initialize GPUI, acquire the interactive
             // singleton, or register Explorer entries for the SYSTEM account.
-            return Ok(omdrop_service::service::dispatch()?);
+            return Ok(wayline_service::service::dispatch()?);
         }
         integration::Mode::Desktop(launch) => launch,
     };
-    omdrop_core::enable_board_feedback();
+    wayline_core::enable_board_feedback();
     if launch.unregister {
         return integration::unregister();
     }
@@ -91,12 +91,12 @@ fn main() -> anyhow::Result<()> {
             },
             |window, cx| cx.new(|cx| ui::Capsule::new(window, cx, launch.files)),
         )
-        .expect("open Omdrop capsule");
+        .expect("open Wayline capsule");
     });
     Ok(())
 }
 
 #[cfg(not(windows))]
 fn main() {
-    eprintln!("omdrop-desktop requires Windows");
+    eprintln!("wayline-desktop requires Windows");
 }

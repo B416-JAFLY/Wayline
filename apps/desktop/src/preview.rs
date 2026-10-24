@@ -192,7 +192,7 @@ mod tests {
             "thumbnail must preserve the photo's colors in BGRA order"
         );
         let document = directory.path().join("notes.txt");
-        std::fs::write(&document, "Omdrop file icon test").unwrap();
+        std::fs::write(&document, "Wayline file icon test").unwrap();
         let icon = load(&document).unwrap();
         assert!(
             icon.as_bytes(0)

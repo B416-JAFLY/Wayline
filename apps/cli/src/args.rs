@@ -1,12 +1,12 @@
 use crate::output::Failure;
-use omdrop_core::SendFormat;
 use std::{
     net::{Ipv6Addr, SocketAddr},
     path::PathBuf,
     time::Duration,
 };
+use wayline_core::SendFormat;
 
-pub const HELP: &str = "omdrop-cli status [--json]\nomdrop-cli doctor [--json]\nomdrop-cli radio status [--json]\nomdrop-cli radio set --band 2.4ghz|5ghz --channel 6|44|149 [--json]\nomdrop-cli discover [--timeout 15] [--json]\nomdrop-cli send [--to NAME] [--format auto|gzip|dvzip] [--json] -- FILE...\nomdrop-cli receive [--accept-all] [--save DIR] [--decision-timeout 60] [--json]\nomdrop-cli receive --bind [::1]:8771 --accept-all [--save DIR]\nomdrop-cli firmware info [--board PROFILE] [--manifest PATH] [--json]\nomdrop-cli firmware flash --port COMx --board PROFILE [--manifest PATH] [--tool PATH]\n                          [--reinstall --yes-replace] [--json]\n固件 profile：cardputer-adv、esp32s3-uart0、esp32s3-native-usb、esp32c5-uart0、esp32c5-native-usb。\n无线命令可用 --name NAME、--link-local ADDRESS --iface-index N 覆盖本次设置。\n发现和发送可用 --no-ble / --legacy-ble。默认自动选择 awdl0。\n--reinstall --yes-replace 会替换现有程序及分区布局，不保证保留其他固件数据。";
+pub const HELP: &str = "wayline-cli status [--json]\nwayline-cli doctor [--json]\nwayline-cli radio status [--json]\nwayline-cli radio set --band 2.4ghz|5ghz --channel 6|44|149 [--json]\nwayline-cli discover [--timeout 15] [--json]\nwayline-cli send [--to NAME] [--format auto|gzip|dvzip] [--json] -- FILE...\nwayline-cli receive [--accept-all] [--save DIR] [--decision-timeout 60] [--json]\nwayline-cli receive --bind [::1]:8771 --accept-all [--save DIR]\nwayline-cli firmware info [--board PROFILE] [--manifest PATH] [--json]\nwayline-cli firmware flash --port COMx --board PROFILE [--manifest PATH] [--tool PATH]\n                          [--reinstall --yes-replace] [--json]\n固件 profile：cardputer-adv、esp32s3-uart0、esp32s3-native-usb、esp32c5-uart0、esp32c5-native-usb。\n无线命令可用 --name NAME、--link-local ADDRESS --iface-index N 覆盖本次设置。\n发现和发送可用 --no-ble / --legacy-ble。默认自动选择 awdl0。\n--reinstall --yes-replace 会替换现有程序及分区布局，不保证保留其他固件数据。";
 
 pub struct Args {
     pub command: String,
@@ -273,7 +273,7 @@ impl Args {
                 if self.yes_replace && !self.reinstall {
                     return Err(Failure::policy("--yes-replace 必须与 --reinstall 同时使用"));
                 }
-                if !omdrop_flash::supported_profiles()
+                if !wayline_flash::supported_profiles()
                     .iter()
                     .any(|profile| Some(profile.id) == self.board.as_deref())
                 {
@@ -282,7 +282,7 @@ impl Args {
             }
             "firmware info" => {
                 if self.board.as_deref().is_some_and(|board| {
-                    !omdrop_flash::supported_profiles()
+                    !wayline_flash::supported_profiles()
                         .iter()
                         .any(|profile| profile.id == board)
                 }) {

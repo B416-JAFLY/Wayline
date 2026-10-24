@@ -4,15 +4,15 @@ members = [
     "apps/desktop",
     "apps/cli",
     "apps/bridge",
-    "crates/omdrop-awdl",
-    "crates/omdrop-board",
-    "crates/omdrop-core",
-    "crates/omdrop-host",
-    "crates/omdrop-flash",
-    "crates/omdrop-proto",
-    "crates/omdrop-radio",
-    "crates/omdrop-service",
-    "crates/omdrop-transport",
+    "crates/wayline-awdl",
+    "crates/wayline-board",
+    "crates/wayline-core",
+    "crates/wayline-host",
+    "crates/wayline-flash",
+    "crates/wayline-proto",
+    "crates/wayline-radio",
+    "crates/wayline-service",
+    "crates/wayline-transport",
 ]
 # ESP32 uses the Xtensa toolchain and its own lockfile/release profile.
 # Third-party compatibility patches are not workspace members.
@@ -30,7 +30,7 @@ codegen-units = 1
 panic = "abort"
 
 # Favor speed in the measured archive/compression hot paths.
-# See docs/DEVELOPMENT.md and crates/omdrop-core/examples/archive_bench.rs.
+# See docs/DEVELOPMENT.md and crates/wayline-core/examples/archive_bench.rs.
 [profile.release.package.owly-airdrop]
 opt-level = 3
 

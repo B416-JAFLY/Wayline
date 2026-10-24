@@ -68,7 +68,7 @@ struct NotificationPlacement {
 pub struct Instance(HANDLE);
 impl Instance {
     pub fn acquire(paths: &[PathBuf]) -> Result<Option<Self>> {
-        let handle = unsafe { CreateMutexW(None, false, w!("Local\\OmdropDesktop"))? };
+        let handle = unsafe { CreateMutexW(None, false, w!("Local\\WaylineDesktop"))? };
         if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
             let _handle = Self(handle);
             let bytes = crate::integration::encode_paths(paths)?;
@@ -77,8 +77,8 @@ impl Instance {
             let deadline = Instant::now() + Duration::from_secs(10);
             loop {
                 unsafe {
-                    if let Ok(hwnd) = FindWindowW(None, w!("Omdrop"))
-                        && !GetPropW(hwnd, w!("OmdropDesktop.Ready")).is_invalid()
+                    if let Ok(hwnd) = FindWindowW(None, w!("Wayline"))
+                        && !GetPropW(hwnd, w!("WaylineDesktop.Ready")).is_invalid()
                     {
                         let mut pid = 0;
                         GetWindowThreadProcessId(hwnd, Some(&mut pid));
@@ -101,11 +101,11 @@ impl Instance {
                         if accepted == 1 {
                             return Ok(None);
                         }
-                        bail!("Omdrop 未能接收文件，请稍后重试");
+                        bail!("Wayline 未能接收文件，请稍后重试");
                     }
                 }
                 if Instant::now() >= deadline {
-                    bail!("等待 Omdrop 窗口超时");
+                    bail!("等待 Wayline 窗口超时");
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
@@ -226,7 +226,7 @@ impl Shell {
         let _ = ACTIONS.set(tx.clone());
         let taskbar_mode = std::env::args_os().any(|arg| arg == "--show-in-taskbar");
         unsafe {
-            SetWindowTextW(hwnd, w!("Omdrop")).context("设置桌面窗口标题失败")?;
+            SetWindowTextW(hwnd, w!("Wayline")).context("设置桌面窗口标题失败")?;
             // Optional taskbar presence also makes this utility reachable to
             // desktop accessibility/inspection tools that omit tool windows.
             if taskbar_mode {
@@ -243,7 +243,7 @@ impl Shell {
             crate::file_drop::register(hwnd, tx.clone()).context("注册资源管理器拖放失败")?;
             SetPropW(
                 hwnd,
-                w!("OmdropDesktop.Ready"),
+                w!("WaylineDesktop.Ready"),
                 Some(HANDLE(std::ptr::dangling_mut())),
             )
             .context("注册桌面窗口标记失败")?;
@@ -403,7 +403,7 @@ impl Shell {
         let owner = self.hwnd.0 as usize;
         let tx = ACTIONS.get().unwrap().clone();
         std::thread::Builder::new()
-            .name("omdrop-file-picker".into())
+            .name("wayline-file-picker".into())
             .spawn(move || {
                 let language = crate::i18n::current();
                 let result =
@@ -417,7 +417,7 @@ impl Shell {
         let owner = self.hwnd.0 as usize;
         let tx = ACTIONS.get().unwrap().clone();
         std::thread::Builder::new()
-            .name("omdrop-directory-picker".into())
+            .name("wayline-directory-picker".into())
             .spawn(move || {
                 let language = crate::i18n::current();
                 let result = crate::picker::choose_directory(owner, language).map_err(|error| {
@@ -433,7 +433,7 @@ impl Shell {
         let owner = self.hwnd.0 as usize;
         let tx = ACTIONS.get().unwrap().clone();
         std::thread::Builder::new()
-            .name("omdrop-open-files".into())
+            .name("wayline-open-files".into())
             .spawn(move || {
                 let result = (|| -> Result<()> {
                     let _apartment = crate::picker::Apartment::new()?;
@@ -468,7 +468,7 @@ impl Shell {
         let owner = self.hwnd.0 as usize;
         let tx = ACTIONS.get().unwrap().clone();
         std::thread::Builder::new()
-            .name("omdrop-history-folder".into())
+            .name("wayline-history-folder".into())
             .spawn(move || {
                 let result = (|| -> Result<()> {
                     let metadata = std::fs::metadata(&path)
@@ -518,7 +518,7 @@ impl Shell {
         let owner = self.hwnd.0 as usize;
         let tx = ACTIONS.get().unwrap().clone();
         std::thread::Builder::new()
-            .name("omdrop-history-file".into())
+            .name("wayline-history-file".into())
             .spawn(move || {
                 let result = (|| -> Result<()> {
                     let file: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
@@ -770,7 +770,7 @@ impl Drop for Shell {
         self.stop_drag_monitor.store(true, Ordering::Relaxed);
         crate::file_drop::unregister(self.hwnd);
         unsafe {
-            let _ = RemovePropW(self.hwnd, w!("OmdropDesktop.Ready"));
+            let _ = RemovePropW(self.hwnd, w!("WaylineDesktop.Ready"));
             let _ = Shell_NotifyIconW(NIM_DELETE, &self.tray_data());
             let _ = RemoveWindowSubclass(self.hwnd, Some(subclass), 1);
             // Remove the HWND's references before the owned Icon fields drop.

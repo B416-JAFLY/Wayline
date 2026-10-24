@@ -1,12 +1,3 @@
-use omdrop_core::{
-    discover_receivers_live_cancellable, send_to_receiver_cancellable, server_config,
-    validate_files, DiscoveryEvent, Identity, NearbyReceiver, NetworkInterface, ReceiverCore,
-    ReceiverEvent, ReceiverOptions, SendCancellation, SendEvent, SendOptions,
-};
-use omdrop_service::{
-    client::{Client, ClientErrorKind},
-    session::{ClientLease, SessionKind},
-};
 use serde_json::{json, Value};
 use std::{
     env,
@@ -18,6 +9,15 @@ use std::{
     },
     thread,
     time::{Duration, Instant},
+};
+use wayline_core::{
+    discover_receivers_live_cancellable, send_to_receiver_cancellable, server_config,
+    validate_files, DiscoveryEvent, Identity, NearbyReceiver, NetworkInterface, ReceiverCore,
+    ReceiverEvent, ReceiverOptions, SendCancellation, SendEvent, SendOptions,
+};
+use wayline_service::{
+    client::{Client, ClientErrorKind},
+    session::{ClientLease, SessionKind},
 };
 
 mod args;
@@ -31,7 +31,7 @@ use output::{Failure, Output};
 struct Signals {
     cancel: SendCancellation,
     shutdown: Arc<AtomicBool>,
-    flash: omdrop_flash::Cancellation,
+    flash: wayline_flash::Cancellation,
 }
 impl Signals {
     fn stop(&self) {
@@ -51,7 +51,7 @@ impl Signals {
 fn main() {
     let values: Vec<_> = env::args().skip(1).collect();
     if values == ["--version"] || values == ["-V"] {
-        println!("omdrop-cli {}", env!("CARGO_PKG_VERSION"));
+        println!("wayline-cli {}", env!("CARGO_PKG_VERSION"));
         return;
     }
     let output = Output {
@@ -75,7 +75,7 @@ fn main() {
             return Ok(());
         }
         ctrlc::set_handler(move || stop.stop()).map_err(Failure::operation)?;
-        omdrop_core::enable_board_feedback();
+        wayline_core::enable_board_feedback();
         run(args, output, &signals)
     });
     output.terminal(&command, &result);
@@ -125,10 +125,10 @@ fn run(args: Args, output: Output, signals: &Signals) -> Result<(), Failure> {
                 validate_files(&args.files).map_err(Failure::policy)?;
             }
             let name = match &args.name {
-                Some(name) => omdrop_host::normalize_name(name).map_err(Failure::policy)?,
-                None => omdrop_host::load_name().map_err(Failure::operation)?,
+                Some(name) => wayline_host::normalize_name(name).map_err(Failure::policy)?,
+                None => wayline_host::load_name().map_err(Failure::operation)?,
             };
-            let identity = omdrop_host::load_identity(&name).map_err(Failure::operation)?;
+            let identity = wayline_host::load_identity(&name).map_err(Failure::operation)?;
             if args.command == "receive" && args.bind.is_some() {
                 return receive(&args, &name, identity, None, output, signals);
             }
@@ -194,7 +194,7 @@ fn acquire(kind: SessionKind, signals: &Signals) -> Result<ClientLease, Failure>
     signals.check()?;
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        omdrop_service::service_control::start().map_err(Failure::unavailable)?;
+        wayline_service::service_control::start().map_err(Failure::unavailable)?;
         signals.check()?;
         match Client::default().acquire(kind) {
             Ok(lease) => return Ok(lease),
@@ -250,7 +250,7 @@ fn wait_interface(args: &Args, signals: &Signals) -> Result<NetworkInterface, Fa
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         signals.check()?;
-        match omdrop_host::select_interface(args.address, args.index) {
+        match wayline_host::select_interface(args.address, args.index) {
             Ok(interface) => return Ok(interface),
             Err(error) if args.address.is_some() || Instant::now() >= deadline => {
                 return Err(Failure::unavailable(error))
@@ -406,7 +406,7 @@ fn receive(
     signals.check()?;
     let save = match &args.save {
         Some(save) => save.clone(),
-        None => omdrop_host::download_dir().map_err(Failure::operation)?,
+        None => wayline_host::download_dir().map_err(Failure::operation)?,
     };
     let mut options = ReceiverOptions::new(name, &args.model, &save);
     options.accept_all = args.accept_all;
@@ -414,7 +414,7 @@ fn receive(
     options.allow_dvzip_archive_boundary = interface.is_some();
     let service_id = if interface.is_some() {
         let advertisement =
-            omdrop_host::receiver_advertisement(&identity, name).map_err(Failure::operation)?;
+            wayline_host::receiver_advertisement(&identity, name).map_err(Failure::operation)?;
         options.retired_service_ids = advertisement.retired_service_ids;
         advertisement.service_id
     } else {
@@ -488,11 +488,11 @@ fn doctor(output: Output) -> Result<(), Failure> {
             );
         }
     }
-    match omdrop_host::awdl_interface() {
+    match wayline_host::awdl_interface() {
         Ok(interface) => output.event("diagnostic", json!({"check":"interface","ok":true,"name":interface.name,"index":interface.index,"address":interface.link_local.to_string()})),
         Err(error) => { failed = true; output.event("diagnostic", json!({"check":"interface","ok":false,"message":error.to_string()})); }
     }
-    match omdrop_host::inspect_name() {
+    match wayline_host::inspect_name() {
         Ok(name) => output.event(
             "diagnostic",
             json!({"check":"configuration","ok":true,"name":name}),
@@ -518,12 +518,12 @@ fn firmware_info(args: &Args, output: Output) -> Result<(), Failure> {
     let board = args
         .board
         .as_deref()
-        .unwrap_or(omdrop_flash::SUPPORTED_BOARD);
+        .unwrap_or(wayline_flash::SUPPORTED_BOARD);
     let manifest = match &args.manifest {
         Some(path) => path.clone(),
-        None => omdrop_flash::installed_manifest_for_board(board).map_err(Failure::unavailable)?,
+        None => wayline_flash::installed_manifest_for_board(board).map_err(Failure::unavailable)?,
     };
-    let package = omdrop_flash::validate_package(&manifest).map_err(Failure::operation)?;
+    let package = wayline_flash::validate_package(&manifest).map_err(Failure::operation)?;
     if args
         .board
         .as_deref()
@@ -535,7 +535,7 @@ fn firmware_info(args: &Args, output: Output) -> Result<(), Failure> {
         "firmwarePackage",
         serde_json::to_value(&package.manifest).map_err(Failure::operation)?,
     );
-    let devices = omdrop_flash::enumerate_devices().map_err(Failure::unavailable)?;
+    let devices = wayline_flash::enumerate_devices().map_err(Failure::unavailable)?;
     output.event("firmwareDevices", json!({"devices":devices.iter().map(|device| json!({"port":device.port,"label":device.label,"firmwareVersion":null})).collect::<Vec<_>>() }));
     Ok(())
 }
@@ -543,34 +543,34 @@ fn firmware_info(args: &Args, output: Output) -> Result<(), Failure> {
 fn firmware_flash(args: &Args, output: Output, signals: &Signals) -> Result<(), Failure> {
     signals.check()?;
     let board = args.board.as_deref().expect("validated board");
-    let options = omdrop_flash::FlashOptions {
+    let options = wayline_flash::FlashOptions {
         manifest_path: match &args.manifest {
             Some(path) => path.clone(),
             None => {
-                omdrop_flash::installed_manifest_for_board(board).map_err(Failure::unavailable)?
+                wayline_flash::installed_manifest_for_board(board).map_err(Failure::unavailable)?
             }
         },
         tool_path: match &args.tool {
             Some(path) => path.clone(),
-            None => omdrop_flash::installed_tool().map_err(Failure::unavailable)?,
+            None => wayline_flash::installed_tool().map_err(Failure::unavailable)?,
         },
         port: args.port.clone().expect("validated port"),
         board: args.board.clone().expect("validated board"),
         mode: if args.reinstall {
-            omdrop_flash::InstallMode::Reinstall
+            wayline_flash::InstallMode::Reinstall
         } else {
-            omdrop_flash::InstallMode::Upgrade
+            wayline_flash::InstallMode::Upgrade
         },
     };
     if args.reinstall {
         output.event("firmwareReplacement", json!({"message":"本次将替换现有程序和分区布局，不保证保留其他固件数据；写入中取消可能需要完整重刷。"}));
     }
-    let report = omdrop_flash::flash(&options, &signals.flash, |event| {
+    let report = wayline_flash::flash(&options, &signals.flash, |event| {
         output.event("firmwareProgress", serde_json::to_value(event).unwrap_or_else(|error| json!({"message":error.to_string()})));
     }).map_err(|error| {
         output.event("firmwareFailed", json!({"stage":error.stage,"possiblyWritten":error.possibly_written,"retryable":error.retryable,"cancelled":error.cancelled,"message":error.message}));
         let code = if error.cancelled { 130 } else if error.busy { 6 }
-            else if matches!(error.stage, omdrop_flash::FlashStage::Connect | omdrop_flash::FlashStage::AcquireMaintenance) && !error.possibly_written { 3 } else { 5 };
+            else if matches!(error.stage, wayline_flash::FlashStage::Connect | wayline_flash::FlashStage::AcquireMaintenance) && !error.possibly_written { 3 } else { 5 };
         Failure::new(code, "firmware", error)
     })?;
     output.event("firmwareCompleted", json!({"port":report.port,"firmwareVersion":report.firmware_version,"imagesWritten":report.images_written,"deviceReady":report.device_ready}));

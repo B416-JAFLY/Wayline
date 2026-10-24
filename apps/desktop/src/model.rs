@@ -2,14 +2,14 @@ use crate::{
     backend::{Event, LinkStatus, SendFailure},
     i18n::{self, Language},
 };
-use omdrop_core::{DiscoveryEvent, NearbyReceiver, SendEvent, SendFormat};
-use omdrop_host::{
-    TransferDirection, TransferFailureReason, TransferFormat, TransferHistoryRecord,
-    TransferOutcome,
-};
 use std::{
     path::PathBuf,
     time::{Duration, Instant},
+};
+use wayline_core::{DiscoveryEvent, NearbyReceiver, SendEvent, SendFormat};
+use wayline_host::{
+    TransferDirection, TransferFailureReason, TransferFormat, TransferHistoryRecord,
+    TransferOutcome,
 };
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
@@ -527,7 +527,7 @@ mod tests {
     fn receiver(instance: &str) -> NearbyReceiver {
         NearbyReceiver {
             name: "iPhone".into(),
-            service: omdrop_core::AirDropService {
+            service: wayline_core::AirDropService {
                 instance: instance.into(),
                 host: "phone.local".into(),
                 port: 8771,
@@ -775,12 +775,12 @@ mod tests {
         model.apply_at(
             Event::Transfer(
                 1,
-                SendEvent::Completed(omdrop_core::SendReport {
+                SendEvent::Completed(wayline_core::SendReport {
                     receiver: "iPhone".into(),
                     files: 1,
                     source_bytes: 100,
                     archive_bytes: 100,
-                    format: omdrop_core::SendFormat::Auto,
+                    format: wayline_core::SendFormat::Auto,
                 }),
             ),
             now + Duration::from_secs(35),
@@ -868,12 +868,12 @@ mod tests {
         model.apply_at(
             Event::Transfer(
                 1,
-                SendEvent::Completed(omdrop_core::SendReport {
+                SendEvent::Completed(wayline_core::SendReport {
                     receiver: "iPhone".into(),
                     files: 1,
                     source_bytes: 100,
                     archive_bytes: 100,
-                    format: omdrop_core::SendFormat::Auto,
+                    format: wayline_core::SendFormat::Auto,
                 }),
             ),
             started + Duration::from_secs(2),
@@ -923,12 +923,12 @@ mod tests {
             Event::Timestamped(
                 Box::new(Event::Transfer(
                     1,
-                    SendEvent::Completed(omdrop_core::SendReport {
+                    SendEvent::Completed(wayline_core::SendReport {
                         receiver: "iPhone".into(),
                         files: 1,
                         source_bytes: 1024,
                         archive_bytes: 1024,
-                        format: omdrop_core::SendFormat::Auto,
+                        format: wayline_core::SendFormat::Auto,
                     }),
                 )),
                 started + Duration::from_millis(50),

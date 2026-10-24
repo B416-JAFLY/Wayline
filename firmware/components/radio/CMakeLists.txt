@@ -11,7 +11,7 @@ endif()
 # Retain the bridge component so its callbacks participate in resolution.
 idf_component_register(SRCS ${OWL_RADIO_SRCS}
                        INCLUDE_DIRS "."
-                       PRIV_INCLUDE_DIRS "../../../crates/omdrop-proto/include"
+                       PRIV_INCLUDE_DIRS "../../../crates/wayline-proto/include"
                        PRIV_REQUIRES ${OWL_RADIO_REQUIRES}
                        WHOLE_ARCHIVE)
 

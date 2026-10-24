@@ -1,7 +1,7 @@
 //! Allocation-free USB batching. Each message keeps its own CRC/COBS delimiter.
 //! A batch contains only already queued messages; idle traffic is never delayed.
 
-use omdrop_proto::{encode_frame, CodecError, RAW_MAX};
+use wayline_proto::{encode_frame, CodecError, RAW_MAX};
 
 pub const BATCH_BYTES: usize = 4096;
 pub const BATCH_FRAMES: usize = 8;
@@ -139,7 +139,7 @@ impl Stats {
 mod tests {
     use super::*;
     use crate::protocol::FrameDecoder;
-    use omdrop_proto::{encode_frame, COBS_MAX};
+    use wayline_proto::{encode_frame, COBS_MAX};
 
     #[test]
     fn mixed_frames_remain_wire_identical_and_decode_across_usb_chunks() {

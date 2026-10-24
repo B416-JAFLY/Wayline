@@ -1,0 +1,37 @@
+[package]
+name = "wayline-service"
+version = "0.1.0"
+edition = "2021"
+description = "Windows radio supervisor and named-pipe service for wayline"
+license = "GPL-3.0-only"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.8"
+serialport = "4"
+tokio = { version = "1", features = ["rt", "net", "io-util", "sync", "time", "macros", "signal", "process"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Registry",
+    "Win32_System_Pipes",
+    "Win32_System_IO",
+    "Win32_System_Threading",
+    "Win32_System_JobObjects",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+] }
+
+[[test]]
+name = "windows_service"
+harness = false

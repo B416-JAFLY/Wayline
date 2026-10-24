@@ -22,7 +22,7 @@ fn pixel_size(side: f32, scale_factor: f32) -> u32 {
 fn rasterize(side: u32) -> Arc<RenderImage> {
     static TREE: LazyLock<usvg::Tree> = LazyLock::new(|| {
         usvg::Tree::from_data(SVG, &usvg::Options::default())
-            .expect("the embedded Omdrop vector mark is valid")
+            .expect("the embedded Wayline vector mark is valid")
     });
     let mut pixmap = tiny_skia::Pixmap::new(side, side).expect("bounded icon dimensions");
     let scale = side as f32 / TREE.size().width();

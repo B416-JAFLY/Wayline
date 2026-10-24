@@ -1,6 +1,6 @@
 //! Task chimes and note timing, independent of the speaker driver and frame rate.
 use crate::feedback::Feedback;
-use omdrop_proto::transfer::Phase;
+use wayline_proto::transfer::Phase;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Cue {
@@ -225,7 +225,7 @@ impl Player {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use omdrop_proto::transfer::{Transfer, FRAME_LEN, HEADER_LEN};
+    use wayline_proto::transfer::{Transfer, FRAME_LEN, HEADER_LEN};
     fn set(feedback: &mut Feedback, id: u64, direction: u8, phase: Phase, now: u32) {
         let mut bytes = [0; FRAME_LEN];
         bytes[..HEADER_LEN].copy_from_slice(

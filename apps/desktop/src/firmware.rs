@@ -1,25 +1,25 @@
-//! Presentation state and background coordination; flashing belongs to omdrop-flash.
-use omdrop_flash::{
+//! Presentation state and background coordination; flashing belongs to wayline-flash.
+use std::{sync::mpsc::Sender, thread::JoinHandle};
+use wayline_flash::{
     Cancellation, Device, FlashEvent, FlashOptions, FlashReport, FlashStage, InstallMode,
 };
-use std::{sync::mpsc::Sender, thread::JoinHandle};
 
 pub enum Event {
-    Inventory(Result<(Vec<Device>, Vec<omdrop_flash::Manifest>), String>),
+    Inventory(Result<(Vec<Device>, Vec<wayline_flash::Manifest>), String>),
     Progress(FlashEvent),
-    Done(Result<FlashReport, omdrop_flash::FlashError>),
+    Done(Result<FlashReport, wayline_flash::FlashError>),
 }
 
 pub struct Model {
     pub open: bool,
     pub loading: bool,
     pub devices: Vec<Device>,
-    pub packages: Vec<omdrop_flash::Manifest>,
+    pub packages: Vec<wayline_flash::Manifest>,
     pub selected: Option<String>,
     pub board_confirmed: bool,
     pub mode: InstallMode,
     pub version: Option<String>,
-    pub package: Option<omdrop_flash::Manifest>,
+    pub package: Option<wayline_flash::Manifest>,
     pub busy: bool,
     pub cancelling: bool,
     pub confirm_exit: bool,
@@ -120,7 +120,7 @@ impl Model {
             .iter()
             .find(|device| &device.port == selected)
             .is_some_and(|device| {
-                omdrop_flash::profile_accepts_usb(board, device.usb_vid, device.usb_pid)
+                wayline_flash::profile_accepts_usb(board, device.usb_vid, device.usb_pid)
             })
     }
     pub fn apply(&mut self, event: Event) -> bool {
@@ -137,7 +137,7 @@ impl Model {
                             .or_else(|| {
                                 packages
                                     .iter()
-                                    .find(|package| package.board == omdrop_flash::SUPPORTED_BOARD)
+                                    .find(|package| package.board == wayline_flash::SUPPORTED_BOARD)
                             })
                             .or_else(|| packages.first())
                             .cloned();
@@ -255,8 +255,8 @@ fn flash_stage_hint(stage: FlashStage) -> &'static str {
 pub fn refresh(events: Sender<crate::backend::Event>) {
     std::thread::spawn(move || {
         let result = (|| -> anyhow::Result<_> {
-            let packages = omdrop_flash::installed_manifests()?;
-            Ok((omdrop_flash::enumerate_devices()?, packages))
+            let packages = wayline_flash::installed_manifests()?;
+            Ok((wayline_flash::enumerate_devices()?, packages))
         })()
         .map_err(|error| format!("{error:#}"));
         let _ = events.send(crate::backend::Event::Firmware(Event::Inventory(result)));
@@ -277,7 +277,7 @@ pub fn start(
         for scan in scans {
             let _ = scan.join();
         }
-        let result = omdrop_flash::flash(&options, &cancel, |progress| {
+        let result = wayline_flash::flash(&options, &cancel, |progress| {
             let _ = events.send(crate::backend::Event::Firmware(Event::Progress(progress)));
         });
         let _ = events.send(crate::backend::Event::Firmware(Event::Done(result)));
@@ -287,8 +287,8 @@ pub fn start(
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn package() -> omdrop_flash::Manifest {
-        omdrop_flash::Manifest {
+    fn package() -> wayline_flash::Manifest {
+        wayline_flash::Manifest {
             format_version: 1,
             board: "cardputer-adv".into(),
             chip: "esp32s3".into(),
@@ -327,11 +327,11 @@ mod tests {
     #[test]
     fn selecting_a_c5_profile_clears_confirmation_and_checks_usb_link_mode() {
         let mut c5_uart = package();
-        c5_uart.board = omdrop_flash::C5_UART_BOARD.into();
+        c5_uart.board = wayline_flash::C5_UART_BOARD.into();
         c5_uart.chip = "esp32c5".into();
-        c5_uart.flash_size = omdrop_flash::C5_FLASH_SIZE;
+        c5_uart.flash_size = wayline_flash::C5_FLASH_SIZE;
         let mut c5_usb = c5_uart.clone();
-        c5_usb.board = omdrop_flash::C5_USB_BOARD.into();
+        c5_usb.board = wayline_flash::C5_USB_BOARD.into();
         let mut model = Model::default();
         model.apply(Event::Inventory(Ok((
             vec![Device {
@@ -344,26 +344,26 @@ mod tests {
         ))));
         model.selected = Some("COM8".into());
         model.board_confirmed = true;
-        assert!(model.select_profile(omdrop_flash::C5_USB_BOARD));
+        assert!(model.select_profile(wayline_flash::C5_USB_BOARD));
         assert!(!model.board_confirmed);
         assert!(!model.can_start(false)); // Confirmation is required again.
         model.board_confirmed = true;
         assert!(model.can_start(false));
-        assert!(model.select_profile(omdrop_flash::C5_UART_BOARD));
+        assert!(model.select_profile(wayline_flash::C5_UART_BOARD));
         model.board_confirmed = true;
         assert!(!model.can_start(false)); // Native USB port cannot use the UART0 profile.
     }
     #[test]
     fn headless_s3_profiles_are_available_for_uart_and_native_usb() {
-        assert!(omdrop_flash::profile_for_board(omdrop_flash::S3_UART_BOARD).is_some());
-        assert!(omdrop_flash::profile_for_board(omdrop_flash::S3_USB_BOARD).is_some());
-        assert!(omdrop_flash::profile_accepts_usb(
-            omdrop_flash::S3_UART_BOARD,
+        assert!(wayline_flash::profile_for_board(wayline_flash::S3_UART_BOARD).is_some());
+        assert!(wayline_flash::profile_for_board(wayline_flash::S3_USB_BOARD).is_some());
+        assert!(wayline_flash::profile_accepts_usb(
+            wayline_flash::S3_UART_BOARD,
             0x1a86,
             0x7523
         ));
-        assert!(omdrop_flash::profile_accepts_usb(
-            omdrop_flash::S3_USB_BOARD,
+        assert!(wayline_flash::profile_accepts_usb(
+            wayline_flash::S3_USB_BOARD,
             0x303a,
             0x1001
         ));
@@ -425,7 +425,7 @@ mod tests {
             confirm_exit: true,
             ..Default::default()
         };
-        assert!(model.apply(Event::Done(Err(omdrop_flash::FlashError {
+        assert!(model.apply(Event::Done(Err(wayline_flash::FlashError {
             stage: FlashStage::CheckBoot,
             possibly_written: true,
             retryable: true,

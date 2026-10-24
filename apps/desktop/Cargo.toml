@@ -1,5 +1,5 @@
 [package]
-name = "omdrop-desktop"
+name = "wayline-desktop"
 version = "0.1.0"
 edition = "2024"
 description = "Native GPUI AirDrop capsule and Windows radio service"
@@ -8,10 +8,10 @@ license = "GPL-3.0-only"
 [target.'cfg(windows)'.dependencies]
 gpui = { version = "=0.2.2", default-features = false, features = ["windows-manifest"] }
 anyhow = "1"
-omdrop-core = { path = "../../crates/omdrop-core" }
-omdrop-service = { path = "../../crates/omdrop-service" }
-omdrop-host = { path = "../../crates/omdrop-host" }
-omdrop-flash = { path = "../../crates/omdrop-flash" }
+wayline-core = { path = "../../crates/wayline-core" }
+wayline-service = { path = "../../crates/wayline-service" }
+wayline-host = { path = "../../crates/wayline-host" }
+wayline-flash = { path = "../../crates/wayline-flash" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 unicode-segmentation = "1"

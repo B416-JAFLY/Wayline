@@ -1,12 +1,12 @@
 use crate::backend::Event;
-use omdrop_host::{
-    TransferHistoryRecord, append_transfer_history, delete_transfer_history, load_transfer_history,
-};
 use std::{
     path::PathBuf,
     sync::mpsc::{self, Sender},
     thread::{self, JoinHandle},
     time::{SystemTime, UNIX_EPOCH},
+};
+use wayline_host::{
+    TransferHistoryRecord, append_transfer_history, delete_transfer_history, load_transfer_history,
 };
 
 enum Command {
@@ -22,7 +22,7 @@ impl StoreWorker {
     pub fn start(events: Sender<Event>) -> (Self, JoinHandle<()>) {
         let (commands, rx) = mpsc::channel();
         let worker = thread::Builder::new()
-            .name("omdrop-history".into())
+            .name("wayline-history".into())
             .spawn(move || {
                 let loaded = load_transfer_history().map_err(|error| format!("{error:#}"));
                 let _ = events.send(Event::HistoryLoaded(loaded));
@@ -38,7 +38,7 @@ impl StoreWorker {
                         }
                         Command::Delete(records, delete_files, remember) => {
                             if remember {
-                                let result = omdrop_host::save_history_delete_files(delete_files)
+                                let result = wayline_host::save_history_delete_files(delete_files)
                                     .map_err(|error| format!("{error:#}"));
                                 let _ = events.send(Event::HistoryDeletePreferenceSaved(result));
                             }
@@ -47,7 +47,7 @@ impl StoreWorker {
                             let _ = events.send(Event::HistoryDeleted(result));
                         }
                         Command::SaveDeletePreference(value) => {
-                            let result = omdrop_host::save_history_delete_files(value)
+                            let result = wayline_host::save_history_delete_files(value)
                                 .map_err(|error| format!("{error:#}"));
                             let _ = events.send(Event::HistoryDeletePreferenceSaved(result));
                         }
@@ -152,13 +152,13 @@ mod tests {
         TransferHistoryRecord {
             started_at_unix_ms: 0,
             finished_at_unix_ms: duration_ms,
-            direction: omdrop_host::TransferDirection::Receive,
+            direction: wayline_host::TransferDirection::Receive,
             peer: "iPhone".into(),
             file_count: 1,
             file_bytes: Some(transferred_bytes),
             transferred_bytes,
             duration_ms,
-            outcome: omdrop_host::TransferOutcome::Completed,
+            outcome: wayline_host::TransferOutcome::Completed,
             failure_reason: None,
             destination: None,
             channel: None,

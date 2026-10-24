@@ -1,0 +1,10 @@
+[package]
+name = "wayline-proto"
+version = "0.1.0"
+edition = "2021"
+description = "Shared Rust wire protocol for the wayline OWL radio link"
+license = "GPL-3.0-only"
+
+[features]
+default = ["std"]
+std = []

@@ -1,6 +1,6 @@
-Omdrop UI subset (modified bitmap font), licensed under SIL OFL 1.1 (OFL.txt).
+Wayline UI subset (modified bitmap font), licensed under SIL OFL 1.1 (OFL.txt).
 Source: https://github.com/notofonts/noto-cjk/tree/Sans2.004
 Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf
 SHA256: 2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b
 © 2014-2021 Adobe (http://www.adobe.com/).
-Generated with scripts/generate-ui-font.py; 4-bit coverage, 10/12/18 px.
+Generated with scripts/assets/generate-ui-font.py; 4-bit coverage, 10/12/18 px.

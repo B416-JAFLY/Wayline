@@ -140,7 +140,7 @@ pub fn notice_banner(
 
 pub fn notice_overlay(
     content: NoticeContent,
-    position: omdrop_host::NotificationPosition,
+    position: wayline_host::NotificationPosition,
     on_hover: impl Fn(&bool, &mut Window, &mut App) + 'static,
     on_details_hover: impl Fn(&bool, &mut Window, &mut App) + 'static,
     on_copy: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -155,12 +155,12 @@ pub fn notice_overlay(
         .min_w_0()
         .child(banner);
     overlay = match position {
-        omdrop_host::NotificationPosition::TopLeft => overlay.top(px(62.)).left(px(22.)),
-        omdrop_host::NotificationPosition::TopCenter => overlay.top(px(62.)).left(px(38.)),
-        omdrop_host::NotificationPosition::TopRight => overlay.top(px(62.)).right(px(22.)),
-        omdrop_host::NotificationPosition::BottomLeft => overlay.bottom(px(104.)).left(px(22.)),
-        omdrop_host::NotificationPosition::BottomCenter => overlay.bottom(px(104.)).left(px(38.)),
-        omdrop_host::NotificationPosition::BottomRight => overlay.bottom(px(104.)).right(px(22.)),
+        wayline_host::NotificationPosition::TopLeft => overlay.top(px(62.)).left(px(22.)),
+        wayline_host::NotificationPosition::TopCenter => overlay.top(px(62.)).left(px(38.)),
+        wayline_host::NotificationPosition::TopRight => overlay.top(px(62.)).right(px(22.)),
+        wayline_host::NotificationPosition::BottomLeft => overlay.bottom(px(104.)).left(px(22.)),
+        wayline_host::NotificationPosition::BottomCenter => overlay.bottom(px(104.)).left(px(38.)),
+        wayline_host::NotificationPosition::BottomRight => overlay.bottom(px(104.)).right(px(22.)),
     };
     overlay
 }

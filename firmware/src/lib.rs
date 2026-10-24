@@ -33,7 +33,7 @@ fn panic(_info: &core::panic::PanicInfo<'_>) -> ! {
     unsafe { abort() }
 }
 
-use omdrop_proto::{cobs_decode_in_place, cobs_encode, crc16_ccitt_false};
+use wayline_proto::{cobs_decode_in_place, cobs_encode, crc16_ccitt_false};
 
 /// CRC entry point for the ESP-IDF C transport.
 ///

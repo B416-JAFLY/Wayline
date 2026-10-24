@@ -3263,154 +3263,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "omdrop-awdl"
-version = "0.1.0"
-dependencies = [
- "omdrop-proto",
- "omdrop-radio",
- "owly-awdl",
- "serialport",
- "tokio",
- "tracing",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "omdrop-board"
-version = "0.1.0"
-dependencies = [
- "getrandom 0.4.3",
- "omdrop-proto",
- "tokio",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "omdrop-bridge"
-version = "0.1.0"
-dependencies = [
- "omdrop-awdl",
- "omdrop-service",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "omdrop-cli"
-version = "0.1.0"
-dependencies = [
- "ctrlc",
- "omdrop-core",
- "omdrop-flash",
- "omdrop-host",
- "omdrop-service",
- "serde_json",
-]
-
-[[package]]
-name = "omdrop-core"
-version = "0.1.0"
-dependencies = [
- "flate2",
- "getrandom 0.4.3",
- "hex",
- "omdrop-board",
- "owly-airdrop",
- "rcgen",
- "rustls",
- "sha2 0.10.9",
- "socket2",
- "tempfile",
- "tokio",
- "windows 0.62.2",
-]
-
-[[package]]
-name = "omdrop-desktop"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "embed-resource",
- "gpui",
- "image",
- "omdrop-core",
- "omdrop-flash",
- "omdrop-host",
- "omdrop-service",
- "raw-window-handle",
- "resvg",
- "serde",
- "serde_json",
- "tempfile",
- "toml 1.1.8+spec-1.1.0",
- "unicode-segmentation",
- "windows 0.62.2",
- "windows-core 0.62.2",
-]
-
-[[package]]
-name = "omdrop-flash"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "hex",
- "omdrop-radio",
- "omdrop-service",
- "serde",
- "serde_json",
- "serialport",
- "sha2 0.10.9",
- "tempfile",
- "windows 0.62.2",
-]
-
-[[package]]
-name = "omdrop-host"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "omdrop-core",
- "serde",
- "serde_json",
- "tempfile",
- "windows 0.62.2",
-]
-
-[[package]]
-name = "omdrop-proto"
-version = "0.1.0"
-
-[[package]]
-name = "omdrop-radio"
-version = "0.1.0"
-dependencies = [
- "omdrop-proto",
- "serialport",
-]
-
-[[package]]
-name = "omdrop-service"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "serialport",
- "tempfile",
- "tokio",
- "windows-service",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "omdrop-transport"
-version = "0.1.0"
-dependencies = [
- "omdrop-proto",
-]
-
-[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5910,6 +5762,154 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "wayline-awdl"
+version = "0.1.0"
+dependencies = [
+ "owly-awdl",
+ "serialport",
+ "tokio",
+ "tracing",
+ "wayline-proto",
+ "wayline-radio",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "wayline-board"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "tokio",
+ "wayline-proto",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "wayline-bridge"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "wayline-awdl",
+ "wayline-service",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "wayline-cli"
+version = "0.1.0"
+dependencies = [
+ "ctrlc",
+ "serde_json",
+ "wayline-core",
+ "wayline-flash",
+ "wayline-host",
+ "wayline-service",
+]
+
+[[package]]
+name = "wayline-core"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "getrandom 0.4.3",
+ "hex",
+ "owly-airdrop",
+ "rcgen",
+ "rustls",
+ "sha2 0.10.9",
+ "socket2",
+ "tempfile",
+ "tokio",
+ "wayline-board",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "wayline-desktop"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "embed-resource",
+ "gpui",
+ "image",
+ "raw-window-handle",
+ "resvg",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml 1.1.8+spec-1.1.0",
+ "unicode-segmentation",
+ "wayline-core",
+ "wayline-flash",
+ "wayline-host",
+ "wayline-service",
+ "windows 0.62.2",
+ "windows-core 0.62.2",
+]
+
+[[package]]
+name = "wayline-flash"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hex",
+ "serde",
+ "serde_json",
+ "serialport",
+ "sha2 0.10.9",
+ "tempfile",
+ "wayline-radio",
+ "wayline-service",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "wayline-host"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "wayline-core",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "wayline-proto"
+version = "0.1.0"
+
+[[package]]
+name = "wayline-radio"
+version = "0.1.0"
+dependencies = [
+ "serialport",
+ "wayline-proto",
+]
+
+[[package]]
+name = "wayline-service"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "serialport",
+ "tempfile",
+ "tokio",
+ "windows-service",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "wayline-transport"
+version = "0.1.0"
+dependencies = [
+ "wayline-proto",
 ]
 
 [[package]]

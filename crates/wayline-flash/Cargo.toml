@@ -1,0 +1,20 @@
+[package]
+name = "wayline-flash"
+version = "0.1.0"
+edition = "2024"
+description = "Validated offline firmware packages and coordinated ESP32-S3 flashing"
+license = "GPL-3.0-only"
+
+[dependencies]
+anyhow = "1"
+hex = "0.4"
+wayline-radio = { path = "../wayline-radio" }
+wayline-service = { path = "../wayline-service" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serialport = "4"
+sha2 = "0.10"
+tempfile = "3"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp"] }

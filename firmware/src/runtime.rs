@@ -15,7 +15,7 @@ use core::{
     ffi::{c_char, c_void, CStr},
     slice,
 };
-use omdrop_proto::{FilterMode, RadioMessage, PROTO_MAX_FRAME};
+use wayline_proto::{FilterMode, RadioMessage, PROTO_MAX_FRAME};
 
 use core::sync::atomic::{AtomicU32, Ordering};
 static BA_GENERATION: AtomicU32 = AtomicU32::new(0);
@@ -418,7 +418,7 @@ fn push_uplink(
     batch: &mut Batch,
     message: &[u8],
     encode_us: &mut u32,
-) -> Result<bool, omdrop_proto::CodecError> {
+) -> Result<bool, wayline_proto::CodecError> {
     let start = unsafe { owl_hal_time_us() };
     let result = batch.push(message);
     *encode_us = encode_us.wrapping_add((unsafe { owl_hal_time_us() } - start) as u32);

@@ -14,8 +14,8 @@ use windows::{
     core::{HSTRING, Interface, w},
 };
 
-const VERB: &str = r"Software\Classes\*\shell\Omdrop.Send";
-const LINK: &str = "Omdrop AirDrop.lnk";
+const VERB: &str = r"Software\Classes\*\shell\Wayline.Send";
+const LINK: &str = "Wayline AirDrop.lnk";
 pub const COPY_DATA_ID: usize = 0x4f4d4452;
 pub const MAX_ACTIVATION_BYTES: usize = 1024 * 1024;
 
@@ -29,7 +29,7 @@ impl Mode {
         // Only an explicit leading switch selects the SCM entry point. A file
         // named --service after Explorer's "--send --" remains a file.
         if args.first().is_some_and(|arg| arg == "--service") {
-            let options = omdrop_service::service::Options::parse(args)?;
+            let options = wayline_service::service::Options::parse(args)?;
             ensure!(
                 options.is_some_and(|options| options.scm),
                 "--service 只能用于 Windows 服务模式"
@@ -272,8 +272,8 @@ mod tests {
             ]
         );
         assert_eq!(
-            command(Path::new(r"C:\Program Files\Omdrop\omdrop.exe")),
-            r#""C:\Program Files\Omdrop\omdrop.exe" --send -- "%1""#
+            command(Path::new(r"C:\Program Files\Wayline\wayline.exe")),
+            r#""C:\Program Files\Wayline\wayline.exe" --send -- "%1""#
         );
         assert!(Launch::parse([OsString::from("--unknown")]).is_err());
     }

@@ -1,5 +1,5 @@
 [package]
-name = "omdrop-cli"
+name = "wayline-cli"
 version = "0.1.0"
 edition = "2021"
 description = "Rust AirDrop sender and receiver CLI"
@@ -7,8 +7,8 @@ license = "GPL-3.0-only"
 
 [dependencies]
 ctrlc = "3.4"
-omdrop-core = { path = "../../crates/omdrop-core" }
-omdrop-host = { path = "../../crates/omdrop-host" }
-omdrop-service = { path = "../../crates/omdrop-service" }
-omdrop-flash = { path = "../../crates/omdrop-flash" }
+wayline-core = { path = "../../crates/wayline-core" }
+wayline-host = { path = "../../crates/wayline-host" }
+wayline-service = { path = "../../crates/wayline-service" }
+wayline-flash = { path = "../../crates/wayline-flash" }
 serde_json = "1"

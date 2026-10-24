@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
      viewBox="288 98 512 512" role="img" aria-labelledby="logo-title logo-description">
-  <title id="logo-title">Omdrop — paired paper transfer mark</title>
+  <title id="logo-title">Wayline — paired paper transfer mark</title>
   <desc id="logo-description">Two congruent rounded triangles, one rotated 180 degrees around 544,354. Transparent square application icon with equal side padding.</desc>
   <defs>
     <!-- Circular fillets at the three corners have radii 13, 19 and 23.

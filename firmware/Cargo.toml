@@ -16,7 +16,7 @@ name = "ui_preview"
 required-features = ["cardputer-ui"]
 
 [dependencies]
-omdrop-proto = { path = "../crates/omdrop-proto", default-features = false }
+wayline-proto = { path = "../crates/wayline-proto", default-features = false }
 
 [profile.release]
 opt-level = "s"
@@ -25,5 +25,5 @@ codegen-units = 1
 panic = "abort"
 
 # CRC/COBS runs once per radio byte; keep the rest of the MCU application small.
-[profile.release.package.omdrop-proto]
+[profile.release.package.wayline-proto]
 opt-level = 3

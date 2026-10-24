@@ -1,0 +1,9 @@
+[package]
+name = "wayline-transport"
+version = "0.1.0"
+edition = "2021"
+description = "Blocking stream transport for the wayline radio protocol"
+license = "GPL-3.0-only"
+
+[dependencies]
+wayline-proto = { path = "../wayline-proto" }

@@ -1,5 +1,5 @@
-use omdrop_core::NearbyReceiver;
 use std::io::{self, BufRead, Write};
+use wayline_core::NearbyReceiver;
 
 /// Explicit input is required even when exactly one receiver was found.
 pub fn choose<'a>(
@@ -53,7 +53,7 @@ pub fn choose<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use omdrop_core::AirDropService;
+    use wayline_core::AirDropService;
     #[test]
     fn duplicate_names_keep_distinct_choices_and_blank_eof_or_invalid_never_select() {
         let receivers: Vec<_> = (1..=2)

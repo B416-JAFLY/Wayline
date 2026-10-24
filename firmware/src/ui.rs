@@ -5,7 +5,7 @@ use crate::ui_brand;
 use crate::ui_fonts::{Font, Glyph, FONT_10, FONT_12, FONT_18};
 use crate::ui_orb::OrbMotion;
 use crate::ui_strings::COPY;
-use omdrop_proto::transfer::{Phase, Reason, Transfer, LABEL_HEIGHT, LABEL_WIDTH};
+use wayline_proto::transfer::{Phase, Reason, Transfer, LABEL_HEIGHT, LABEL_WIDTH};
 
 pub const WIDTH: usize = 240;
 pub const HEIGHT: usize = 135;
@@ -726,7 +726,7 @@ fn render_inner(
             canvas.center_text(39, "Cardputer Adv", &FONT_12, WHITE);
             canvas.center_text(
                 61,
-                concat!("Omdrop ", env!("CARGO_PKG_VERSION"), " / Rust"),
+                concat!("Wayline ", env!("CARGO_PKG_VERSION"), " / Rust"),
                 &FONT_10,
                 MUTED,
             );
@@ -1295,7 +1295,7 @@ mod tests {
     }
     #[test]
     fn transfers_wake_but_respect_manual_sleep_and_do_not_auto_sleep() {
-        use omdrop_proto::transfer::{FRAME_LEN, HEADER_LEN};
+        use wayline_proto::transfer::{FRAME_LEN, HEADER_LEN};
         let mut ui = UiState::default();
         ui.key(b'T', 0); // 30 seconds.
         ui.key(b'S', 1);

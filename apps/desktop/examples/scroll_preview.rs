@@ -1,5 +1,5 @@
 //! Hardware-free preview of the shared desktop scroll area.
-//! Run `cargo run -p omdrop-desktop --example scroll_preview --locked` on Windows.
+//! Run `cargo run -p wayline-desktop --example scroll_preview --locked` on Windows.
 //! Press 1/2/3 for long, short and nested content, or Esc to quit.
 //! Optional --short / --nested chooses the initial page.
 
@@ -223,7 +223,7 @@ fn main() {
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
-                    title: Some("Omdrop Scroll Preview".into()),
+                    title: Some("Wayline Scroll Preview".into()),
                     ..Default::default()
                 }),
                 is_resizable: false,

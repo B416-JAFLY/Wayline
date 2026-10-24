@@ -60,9 +60,9 @@ impl Failure {
     }
 }
 
-impl From<omdrop_core::SendError> for Failure {
-    fn from(error: omdrop_core::SendError) -> Self {
-        use omdrop_core::TransferFailureKind::*;
+impl From<wayline_core::SendError> for Failure {
+    fn from(error: wayline_core::SendError) -> Self {
+        use wayline_core::TransferFailureKind::*;
         let code = match error.kind() {
             Declined => 4,
             Cancelled => 130,
@@ -72,9 +72,9 @@ impl From<omdrop_core::SendError> for Failure {
     }
 }
 
-impl From<omdrop_service::client::ClientError> for Failure {
-    fn from(error: omdrop_service::client::ClientError) -> Self {
-        use omdrop_service::client::ClientErrorKind::*;
+impl From<wayline_service::client::ClientError> for Failure {
+    fn from(error: wayline_service::client::ClientError) -> Self {
+        use wayline_service::client::ClientErrorKind::*;
         let code = match error.kind() {
             Busy => 6,
             InvalidRequest => 2,
