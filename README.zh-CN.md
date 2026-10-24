@@ -8,7 +8,7 @@
 
 [English](README.md) · [快速开始](docs/QUICKSTART.zh-CN.md) · [开发指南](docs/DEVELOPMENT.zh-CN.md)
 
-视频演示：[在 YouTube 上观看](https://youtu.be/8IJywijJMYU)
+[![视频演示](https://img.youtube.com/vi/8IJywijJMYU/hqdefault.jpg)](https://www.youtube.com/watch?v=8IJywijJMYU)
 
 ## 工程实现
 

@@ -20,7 +20,7 @@ throughput still need device validation. See the
 
 [中文说明](README.zh-CN.md) · [Quick start](docs/QUICKSTART.md) · [Development guide](docs/DEVELOPMENT.md)
 
-Video demonstration: [Watch on YouTube](https://youtu.be/8IJywijJMYU)
+[![Watch on YouTube](https://img.youtube.com/vi/8IJywijJMYU/hqdefault.jpg)](https://www.youtube.com/watch?v=8IJywijJMYU)
 
 ## Engineering
 
