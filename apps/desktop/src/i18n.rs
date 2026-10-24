@@ -1,5 +1,5 @@
 //! Desktop UI copy and the persisted language preference.
-use omdrop_host::NameError;
+use omdrop_host::{NameError, TransferFormat};
 use std::sync::atomic::{AtomicU8, Ordering};
 use windows::Win32::Globalization::GetUserDefaultUILanguage;
 
@@ -189,6 +189,25 @@ impl Language {
 
     pub fn transfer_speed(self, speed: &str) -> String {
         fill(self.strings().transfer_speed, &[("speed", speed.into())])
+    }
+
+    pub fn channel_label(self, channel: Option<u16>) -> String {
+        let text = self.strings();
+        match channel {
+            Some(6) => text.channel_6.to_owned(),
+            Some(44) => text.channel_44.to_owned(),
+            Some(149) => text.channel_149.to_owned(),
+            _ => text.channel_unknown.to_owned(),
+        }
+    }
+
+    pub fn transfer_network(self, channel: Option<u16>, format: Option<TransferFormat>) -> String {
+        let mode = match format {
+            Some(TransferFormat::Gzip) => "Gzip",
+            Some(TransferFormat::DvZip) => "DVZip",
+            None => "—",
+        };
+        format!("{} · {mode}", self.channel_label(channel))
     }
 
     pub fn transfer_elapsed(self, duration_ms: u64) -> String {

@@ -161,6 +161,8 @@ mod tests {
             outcome: omdrop_host::TransferOutcome::Completed,
             failure_reason: None,
             destination: None,
+            channel: None,
+            format: None,
             file_names: Vec::new(),
             file_paths: Vec::new(),
         }

@@ -492,6 +492,11 @@ impl Capsule {
                     continue;
                 }
                 Event::ReceiverActivity(event) => {
+                    if let omdrop_core::ReceiverEvent::ModeSelected(_) = &event {
+                        let _ = self.receive.apply_at(&event, event_at, event_unix_ms);
+                        changed = true;
+                        continue;
+                    }
                     let record =
                         self.receive
                             .history_record_for_event(&event, event_at, event_unix_ms);
@@ -604,6 +609,13 @@ impl Capsule {
                             "{}{error}",
                             self.language.strings().history_open_error
                         ));
+                    }
+                    changed = true;
+                }
+                Action::HistoryFileOpened(result) => {
+                    if let Err(error) = result {
+                        self.history_error =
+                            Some(format!("{}{error}", self.language.strings().err_open_file));
                     }
                     changed = true;
                 }
@@ -1199,6 +1211,19 @@ impl Capsule {
             self.history_error = Some(format!(
                 "{}{error:#}",
                 self.language.strings().history_open_error
+            ));
+        }
+        cx.notify();
+    }
+
+    fn open_history_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let Some(shell) = &self.shell else {
+            return;
+        };
+        if let Err(error) = shell.open_history_file(path) {
+            self.history_error = Some(format!(
+                "{}{error:#}",
+                self.language.strings().err_open_file
             ));
         }
         cx.notify();
@@ -2999,6 +3024,16 @@ impl Capsule {
                 div()
                     .flex_shrink_0()
                     .text_size(px(11.))
+                    .text_color(rgb(MUTED))
+                    .child(
+                        self.language
+                            .transfer_network(record.channel, record.format),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_size(px(11.))
                     .line_height(px(17.))
                     .whitespace_normal()
                     .text_color(rgb(MUTED))
@@ -3037,26 +3072,39 @@ impl Capsule {
                         .child(failure),
                 )
             });
-        if record.file_names.is_empty() {
-            files = files.child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(rgb(MUTED))
-                    .child(text.history_files_unknown),
-            );
-        } else {
-            for name in &record.file_names {
+        // New records render each file name together with its location and actions
+        // below. Keep the standalone names only for legacy records without paths.
+        if record.file_paths.is_empty() {
+            if record.file_names.is_empty() {
                 files = files.child(
                     div()
-                        .flex_shrink_0()
-                        .text_size(px(12.))
-                        .whitespace_normal()
-                        .child(name.clone()),
+                        .text_size(px(11.))
+                        .text_color(rgb(MUTED))
+                        .child(text.history_files_unknown),
                 );
+            } else {
+                for name in &record.file_names {
+                    files = files.child(
+                        div()
+                            .flex_shrink_0()
+                            .text_size(px(12.))
+                            .whitespace_normal()
+                            .child(name.clone()),
+                    );
+                }
             }
         }
         for (index, path) in record.file_paths.iter().enumerate() {
-            let location = path.clone();
+            let file = path.clone();
+            let location = path
+                .parent()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| path.clone());
+            let file_name = path
+                .file_name()
+                .unwrap_or(path.as_os_str())
+                .to_string_lossy()
+                .into_owned();
             files = files.child(
                 div()
                     .flex_shrink_0()
@@ -3068,18 +3116,49 @@ impl Capsule {
                     .gap(px(6.))
                     .child(
                         div()
-                            .text_size(px(10.))
-                            .text_color(rgb(MUTED))
+                            .flex_shrink_0()
+                            .text_size(px(12.))
+                            .font_weight(FontWeight::MEDIUM)
                             .whitespace_normal()
-                            .child(path.display().to_string()),
+                            .child(file_name),
                     )
                     .child(
-                        button("history-file-location", text.history_open_location, false)
-                            .id(("history-file-location", index))
-                            .h(px(28.))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.open_history_folder(location.clone(), cx)
-                            })),
+                        div()
+                            .flex_shrink_0()
+                            .text_size(px(10.))
+                            .text_color(rgb(MUTED))
+                            .truncate()
+                            .child(location.display().to_string()),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .flex()
+                            .gap(px(8.))
+                            .child(
+                                button("history-file-open", text.open_file, false)
+                                    .id(("history-file-open", index))
+                                    .h(px(28.))
+                                    .min_w(px(72.))
+                                    .px(px(10.))
+                                    .rounded(px(7.))
+                                    .text_size(px(11.))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.open_history_file(file.clone(), cx)
+                                    })),
+                            )
+                            .child(
+                                button("history-file-location", text.history_open_location, false)
+                                    .id(("history-file-location", index))
+                                    .h(px(28.))
+                                    .min_w(px(72.))
+                                    .px(px(10.))
+                                    .rounded(px(7.))
+                                    .text_size(px(11.))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.open_history_folder(location.clone(), cx)
+                                    })),
+                            ),
                     ),
             );
         }
@@ -3274,12 +3353,15 @@ impl Capsule {
         if let Some(request) = self.incoming.take() {
             let active = request.active();
             let accepted = accepted && active;
+            let channel = self.model.current_channel();
             let declined_record = (!accepted && active).then(|| {
-                crate::receiving::declined_history_record(
+                let mut record = crate::receiving::declined_history_record(
                     &request,
                     crate::history::unix_time_ms(std::time::SystemTime::now()),
                     Instant::now(),
-                )
+                );
+                record.channel = channel;
+                record
             });
             self.receiver_declined_until = None;
             request
@@ -3287,6 +3369,7 @@ impl Capsule {
                 .store(accepted, std::sync::atomic::Ordering::Release);
             let delivered = request.decision.send(accepted).is_ok();
             if accepted && delivered {
+                self.receive.set_channel(channel);
                 self.receive.begin(&request.transfer, request.save_dir);
                 self.settings_open = false;
                 self.firmware.open = false;
@@ -3417,6 +3500,12 @@ impl Capsule {
                             .transfer_files(&transfer.sender, transfer.files),
                     ),
             )
+            .child(div().text_size(px(11.)).text_color(rgb(MUTED)).child(
+                self.language.transfer_network(
+                    self.receive.transfer_metadata().0,
+                    self.receive.transfer_metadata().1,
+                ),
+            ))
             .child(
                 div()
                     .relative()
@@ -3964,6 +4053,12 @@ impl Capsule {
                     .text_color(rgb(MUTED))
                     .child(self.model.target.clone()),
             )
+            .child(div().text_size(px(11.)).text_color(rgb(MUTED)).child(
+                self.language.transfer_network(
+                    self.model.transfer_metadata().0,
+                    self.model.transfer_metadata().1,
+                ),
+            ))
             .child(
                 div()
                     .text_size(px(11.))

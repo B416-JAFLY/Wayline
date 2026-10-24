@@ -353,13 +353,15 @@ impl Task {
                     Event::Urls(urls) => {
                         let _ = self.events.send(ReceiverEvent::Urls { id, urls }).await;
                     }
-                    Event::UploadStarted => match Staging::new(&self.options.destination).await {
-                        Ok(s) => {
-                            staging = Some(s);
-                            window = (0, Instant::now() + RATE_WINDOW);
+                    Event::UploadStarted { .. } => {
+                        match Staging::new(&self.options.destination).await {
+                            Ok(s) => {
+                                staging = Some(s);
+                                window = (0, Instant::now() + RATE_WINDOW);
+                            }
+                            Err(e) => return self.fail(&mut tls, id, e).await,
                         }
-                        Err(e) => return self.fail(&mut tls, id, e).await,
-                    },
+                    }
                     Event::CreateDir(path) => {
                         if let Err(e) = staging.as_mut().unwrap().create_dir(&path).await {
                             return self.fail(&mut tls, id, e).await;

@@ -378,6 +378,7 @@ fn send(
         |event| {
             match event {
             SendEvent::Preparing => output.event("preparing", json!({})),
+            SendEvent::ModeSelected(format) => output.event("modeSelected", json!({"format":format!("{format:?}")})),
             SendEvent::WaitingForAcceptance { receiver } => output.event("waitingForAcceptance", json!({"receiver":receiver})),
             SendEvent::Uploading { sent, total } => {
                 let now = Instant::now();
@@ -461,6 +462,7 @@ fn receiver_event(event: ReceiverEvent, output: Output) {
         ReceiverEvent::Discovered => output.event("discovered", json!({})),
         ReceiverEvent::ConnectionFailed { peer, error, kind } => output.event("transferFailed", json!({"direction":"receive","peer":peer.to_string(),"category":kind.as_str(),"message":error})),
         ReceiverEvent::Asked(transfer) => output.event("transferAccepted", json!({"sender":transfer.sender_name,"transferId":transfer.id,"files":transfer.files.iter().map(|f| json!({"name":f.name,"size":f.size})).collect::<Vec<_>>()})),
+        ReceiverEvent::ModeSelected(format) => output.event("modeSelected", json!({"direction":"receive","format":format!("{format:?}")})),
         ReceiverEvent::Receiving { transfer_id, received, total } => output.event("receiving", json!({"transferId":transfer_id,"received":received,"total":total})),
         ReceiverEvent::ArchiveBoundary { transfer_id } => output.event("uploadArchiveBoundary", json!({"direction":"receive","transferId":transfer_id})),
         ReceiverEvent::Confirming { transfer_id } => output.event("confirming", json!({"direction":"receive","transferId":transfer_id})),

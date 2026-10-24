@@ -37,6 +37,13 @@ pub enum TransferFailureReason {
     Other,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransferFormat {
+    Gzip,
+    DvZip,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransferHistoryRecord {
@@ -51,6 +58,10 @@ pub struct TransferHistoryRecord {
     pub outcome: TransferOutcome,
     pub failure_reason: Option<TransferFailureReason>,
     pub destination: Option<PathBuf>,
+    #[serde(default)]
+    pub channel: Option<u16>,
+    #[serde(default)]
+    pub format: Option<TransferFormat>,
     #[serde(default)]
     pub file_names: Vec<String>,
     #[serde(default)]
@@ -319,6 +330,9 @@ fn validate_record(record: &TransferHistoryRecord) -> Result<()> {
         record.direction == TransferDirection::Receive || record.destination.is_none(),
         "发送记录不能包含接收目录"
     );
+    if let Some(channel) = record.channel {
+        ensure!(matches!(channel, 6 | 44 | 149), "传输历史信道不受支持");
+    }
     if let Some(destination) = &record.destination {
         ensure!(destination.is_absolute(), "传输历史保存目录必须是绝对路径");
         let text = destination.to_string_lossy();
@@ -414,6 +428,8 @@ mod tests {
             outcome: TransferOutcome::Completed,
             failure_reason: None,
             destination: None,
+            channel: None,
+            format: None,
             file_names: Vec::new(),
             file_paths: Vec::new(),
         }
@@ -531,6 +547,22 @@ mod tests {
         invalid.destination = Some(PathBuf::from("folder"));
         invalid.failure_reason = Some(TransferFailureReason::Other);
         assert!(validate_record(&invalid).is_err());
+    }
+
+    #[test]
+    fn transfer_metadata_round_trips_and_rejects_unknown_channels() {
+        let mut value = record(1);
+        value.channel = Some(44);
+        value.format = Some(TransferFormat::DvZip);
+        let encoded = serde_json::to_vec(&value).unwrap();
+        let decoded: TransferHistoryRecord = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded.channel, Some(44));
+        assert_eq!(decoded.format, Some(TransferFormat::DvZip));
+
+        value.channel = Some(149);
+        assert!(validate_record(&value).is_ok());
+        value.channel = Some(1);
+        assert!(validate_record(&value).is_err());
     }
 
     #[test]

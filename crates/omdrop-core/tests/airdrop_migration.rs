@@ -250,7 +250,7 @@ fn truncated_upload_and_unauthorized_upload_never_complete() {
     c.receive(&wire);
     assert!(!drain(&mut c)
         .iter()
-        .any(|e| matches!(e, Event::UploadStarted | Event::UploadComplete)));
+        .any(|e| matches!(e, Event::UploadStarted { .. } | Event::UploadComplete)));
     let mut c = Connection::new(Arc::new(Config::new("receiver")));
     ask(&mut c, &offer);
     c.receive(&wire[..wire.len() - 3]);

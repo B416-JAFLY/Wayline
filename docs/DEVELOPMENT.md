@@ -207,7 +207,8 @@ source paths and successful receive paths, but no file contents. Each recorded f
 location; older version-1 records without file details remain readable.
 The compact list uses three lines for device/outcome, file overview/size and time/actions.
 Details contains transfer counters, elapsed time, average speed, the complete file list,
-locations and failure reasons.
+locations, radio band/channel, transfer mode and failure reasons. Older records may not have
+radio metadata.
 
 Deleting a record or clearing history always opens a confirmation with Also delete files and
 Remember this option. Both are initially unchecked. Remembering changes only the file-deletion

@@ -64,6 +64,7 @@ pub enum ReceiverEvent {
         kind: TransferFailureKind,
     },
     Asked(IncomingTransfer),
+    ModeSelected(TransferFormat),
     Receiving {
         transfer_id: String,
         received: u64,
@@ -88,6 +89,12 @@ pub enum ReceiverEvent {
         path: String,
         status: u16,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferFormat {
+    Gzip,
+    DvZip,
 }
 #[derive(Debug)]
 pub struct ReceiverError(io::Error);
@@ -309,7 +316,15 @@ impl ReceiverCore {
                             });
                             active = None;
                         }
-                        Event::UploadStarted => {
+                        Event::UploadStarted { compressor } => {
+                            notify(ReceiverEvent::ModeSelected(match compressor {
+                                owly_airdrop::proto::archive::compress::Compressor::Gzip => {
+                                    TransferFormat::Gzip
+                                }
+                                owly_airdrop::proto::archive::compress::Compressor::DvZip => {
+                                    TransferFormat::DvZip
+                                }
+                            }));
                             staging = Some(runtime.block_on(Staging::new(&core.options.save_dir))?)
                         }
                         Event::CreateDir(path) => {

@@ -14,8 +14,8 @@ use std::{
     time::{Duration, Instant},
 };
 pub use transfer_history::{
-    TransferDirection, TransferFailureReason, TransferHistoryRecord, TransferOutcome,
-    append_transfer_history, clear_transfer_history, delete_transfer_history,
+    TransferDirection, TransferFailureReason, TransferFormat, TransferHistoryRecord,
+    TransferOutcome, append_transfer_history, clear_transfer_history, delete_transfer_history,
     load_transfer_history,
 };
 

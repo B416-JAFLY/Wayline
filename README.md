@@ -73,7 +73,8 @@ Before updating, finish transfers, quit Omdrop from the tray, and close CLI comm
   when data transfer begins, includes final confirmation, and excludes preparation and acceptance waits.
 - The history icon at the top of the sharing card opens Recent transfers with up to 200 results.
   The compact list shows device, outcome, file overview, size and time. Details shows the complete
-  file list, transferred bytes, duration, average speed and each file's location. Records retain sent source paths and successful receive
+  file list, transferred bytes, duration, average speed, radio band/channel and transfer mode,
+  and each file's location. Records retain sent source paths and successful receive
   paths without file contents; older records may have no file details.
 - Delete individual records or clear the history with confirmation every time. Also delete files
   and Remember this option are initially unchecked. Deleting files permanently removes the sent

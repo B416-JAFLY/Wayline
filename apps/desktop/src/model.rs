@@ -2,9 +2,10 @@ use crate::{
     backend::{Event, LinkStatus, SendFailure},
     i18n::{self, Language},
 };
-use omdrop_core::{DiscoveryEvent, NearbyReceiver, SendEvent};
+use omdrop_core::{DiscoveryEvent, NearbyReceiver, SendEvent, SendFormat};
 use omdrop_host::{
-    TransferDirection, TransferFailureReason, TransferHistoryRecord, TransferOutcome,
+    TransferDirection, TransferFailureReason, TransferFormat, TransferHistoryRecord,
+    TransferOutcome,
 };
 use std::{
     path::PathBuf,
@@ -28,7 +29,7 @@ impl Visibility {
     }
 }
 
-#[derive(Default, Debug, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq)]
 pub enum Phase {
     #[default]
     Ready,
@@ -93,6 +94,8 @@ pub struct Model {
     send_finished_at: Option<(Instant, u64)>,
     send_history_pending: bool,
     send_file_paths: Vec<PathBuf>,
+    send_channel: Option<u16>,
+    send_format: Option<TransferFormat>,
     pub send_file_count: usize,
     pub send_file_bytes: u64,
     pub send_transferred_bytes: u64,
@@ -191,6 +194,14 @@ impl Model {
                     SendEvent::Preparing => {
                         self.reset_speed();
                         Phase::Preparing
+                    }
+                    SendEvent::ModeSelected(format) => {
+                        self.send_format = Some(match format {
+                            SendFormat::Gzip => TransferFormat::Gzip,
+                            SendFormat::DvZip => TransferFormat::DvZip,
+                            SendFormat::Auto => return false,
+                        });
+                        self.phase.clone()
                     }
                     SendEvent::WaitingForAcceptance { .. } => {
                         self.reset_speed();
@@ -367,6 +378,8 @@ impl Model {
         self.send_finished_at = None;
         self.send_history_pending = true;
         self.send_file_paths = paths;
+        self.send_channel = self.current_channel();
+        self.send_format = None;
         self.send_file_count = self.files.len();
         self.send_file_bytes = self.bytes;
         self.send_transferred_bytes = 0;
@@ -453,6 +466,8 @@ impl Model {
                 })
                 .collect(),
             file_paths: self.send_file_paths.clone(),
+            channel: self.send_channel,
+            format: self.send_format,
             file_bytes: Some(self.send_file_bytes),
             transferred_bytes,
             duration_ms: self
@@ -474,6 +489,18 @@ impl Model {
                 .unwrap_or(now)
                 .saturating_duration_since(started)
         })
+    }
+
+    pub fn current_channel(&self) -> Option<u16> {
+        self.status
+            .as_ref()
+            .and_then(|status| status.as_ref().ok())
+            .map(|status| status.channel)
+            .filter(|channel| matches!(channel, 6 | 44 | 149))
+    }
+
+    pub fn transfer_metadata(&self) -> (Option<u16>, Option<TransferFormat>) {
+        (self.send_channel, self.send_format)
     }
 
     fn reset_speed(&mut self) {

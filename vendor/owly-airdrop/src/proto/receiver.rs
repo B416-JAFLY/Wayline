@@ -102,7 +102,9 @@ pub enum Event {
     /// An accepted URL share. Offer them; don't open them unasked (SEC-4).
     Urls(Vec<String>),
     /// An accepted upload began: create a fresh staging directory.
-    UploadStarted,
+    UploadStarted {
+        compressor: Compressor,
+    },
     /// Create a directory in staging. Parents may not have entries of their
     /// own; create them too.
     CreateDir(RelPath),
@@ -626,7 +628,8 @@ impl Connection {
         if head.expect_continue {
             self.transmit(http::CONTINUE.to_vec());
         }
-        self.events.push_back(Event::UploadStarted);
+        self.events
+            .push_back(Event::UploadStarted { compressor: kind });
         self.progress = Some((
             0,
             match head.body {

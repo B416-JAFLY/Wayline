@@ -3,7 +3,8 @@ use crate::backend::{self, Event};
 use anyhow::Result;
 use omdrop_core::{IncomingTransfer, ReceiverCore, ReceiverEvent, ReceiverOptions};
 use omdrop_host::{
-    TransferDirection, TransferFailureReason, TransferHistoryRecord, TransferOutcome,
+    TransferDirection, TransferFailureReason, TransferFormat, TransferHistoryRecord,
+    TransferOutcome,
 };
 use std::{
     io::Write,
@@ -54,6 +55,8 @@ pub struct Transfer {
     pub started_at_unix_ms: u64,
     pub file_bytes: Option<u64>,
     pub transferred_bytes: u64,
+    pub channel: Option<u16>,
+    pub format: Option<TransferFormat>,
 }
 
 impl Transfer {
@@ -103,6 +106,7 @@ pub struct Model {
     pub speed_bytes_per_second: Option<u64>,
     speed: crate::transfer_speed::TransferSpeed,
     finished_elapsed: Option<Duration>,
+    channel: Option<u16>,
 }
 
 impl Model {
@@ -256,6 +260,8 @@ impl Model {
             started_at_unix_ms: crate::history::unix_time_ms(std::time::SystemTime::now()),
             file_bytes,
             transferred_bytes: 0,
+            channel: self.channel,
+            format: None,
         });
         self.reset_speed();
         self.notice = None;
@@ -332,6 +338,12 @@ impl Model {
             return false;
         };
         match event {
+            ReceiverEvent::ModeSelected(format) => {
+                active.format = Some(match format {
+                    omdrop_core::TransferFormat::Gzip => TransferFormat::Gzip,
+                    omdrop_core::TransferFormat::DvZip => TransferFormat::DvZip,
+                });
+            }
             ReceiverEvent::Receiving {
                 transfer_id,
                 received,
@@ -446,6 +458,8 @@ impl Model {
                 ReceiverEvent::Received { files, .. } => files.clone(),
                 _ => Vec::new(),
             },
+            channel: transfer.channel,
+            format: transfer.format,
             file_bytes: transfer.file_bytes,
             transferred_bytes: transfer.transferred_bytes,
             duration_ms: transfer
@@ -464,6 +478,17 @@ impl Model {
             .as_ref()
             .and_then(|transfer| transfer.elapsed(now))
             .or(self.finished_elapsed)
+    }
+
+    pub fn set_channel(&mut self, channel: Option<u16>) {
+        self.channel = channel.filter(|channel| matches!(channel, 6 | 44 | 149));
+    }
+
+    pub fn transfer_metadata(&self) -> (Option<u16>, Option<TransferFormat>) {
+        self.active
+            .as_ref()
+            .map(|transfer| (transfer.channel, transfer.format))
+            .unwrap_or((self.channel, None))
     }
 
     pub fn expire_speed(&mut self, now: Instant) -> bool {
@@ -516,6 +541,8 @@ pub fn declined_history_record(
             .map(|file| file.name.clone())
             .collect(),
         file_paths: Vec::new(),
+        channel: None,
+        format: None,
         file_bytes,
         transferred_bytes: 0,
         duration_ms: 0,
@@ -754,6 +781,7 @@ fn run(
                     log(&format!("connection from {peer} failed: {error}"))
                 }
                 ReceiverEvent::Asked(_) => log("incoming offer accepted"),
+                ReceiverEvent::ModeSelected(_) => log("transfer mode selected"),
                 ReceiverEvent::Receiving { .. } => {}
                 ReceiverEvent::ArchiveBoundary { transfer_id } => log(&format!(
                     "transfer {transfer_id}: responding at validated AirDrop DVZip archive boundary"

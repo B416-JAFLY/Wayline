@@ -44,6 +44,7 @@ pub struct SendReport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SendEvent {
     Preparing,
+    ModeSelected(SendFormat),
     WaitingForAcceptance { receiver: String },
     Uploading { sent: u64, total: u64 },
     WaitingForConfirmation,
@@ -171,6 +172,7 @@ pub fn send_to_receiver_cancellable(
         let mut event = |e: SendEvent| {
             match &e {
                 SendEvent::Preparing => board.phase(Phase::Preparing),
+                SendEvent::ModeSelected(_) => {}
                 SendEvent::WaitingForAcceptance { .. } => board.phase(Phase::Waiting),
                 SendEvent::Uploading { sent, total } => {
                     board.update(Phase::Transferring, *sent, Some(*total), Reason::None)
@@ -181,11 +183,8 @@ pub fn send_to_receiver_cancellable(
             notify(e);
         };
         event(SendEvent::Preparing);
-        let format = match options.format {
-            SendFormat::Auto if selected.service.flags.unwrap_or(0) & 2 != 0 => SendFormat::DvZip,
-            SendFormat::Auto => SendFormat::Gzip,
-            v => v,
-        };
+        let format = select_format(options.format, selected.service.flags);
+        event(SendEvent::ModeSelected(format));
         let compressor = if format == SendFormat::DvZip {
             Compressor::DvZip
         } else {
@@ -381,6 +380,15 @@ pub fn validate_files(files: &[PathBuf]) -> Result<u64, SendError> {
     }
     Ok(total)
 }
+
+fn select_format(requested: SendFormat, receiver_flags: Option<u32>) -> SendFormat {
+    match requested {
+        SendFormat::Auto if receiver_flags.unwrap_or(0) & 2 != 0 => SendFormat::DvZip,
+        SendFormat::Auto => SendFormat::Gzip,
+        format => format,
+    }
+}
+
 pub(crate) fn client_config(identity: &Identity) -> Result<Arc<ClientConfig>, SendError> {
     crate::tls::install_provider();
     Ok(owly_airdrop::driver::tls::client_config(Some(
@@ -461,5 +469,19 @@ pub(crate) fn discover(
         if let Some(response) = response {
             return Ok(proto::parse_discover_response(&response).map(|r| r.computer_name));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_format_uses_receiver_dvzip_capability_and_falls_back_to_gzip() {
+        assert_eq!(select_format(SendFormat::Auto, Some(2)), SendFormat::DvZip);
+        assert_eq!(select_format(SendFormat::Auto, Some(0)), SendFormat::Gzip);
+        assert_eq!(select_format(SendFormat::Auto, None), SendFormat::Gzip);
+        assert_eq!(select_format(SendFormat::Gzip, Some(2)), SendFormat::Gzip);
+        assert_eq!(select_format(SendFormat::DvZip, Some(0)), SendFormat::DvZip);
     }
 }

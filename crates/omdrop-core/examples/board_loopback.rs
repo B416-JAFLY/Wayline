@@ -69,6 +69,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         |event| match event {
             SendEvent::Preparing
+            | SendEvent::ModeSelected(_)
             | SendEvent::WaitingForAcceptance { .. }
             | SendEvent::WaitingForConfirmation => {
                 println!("{event:?}");

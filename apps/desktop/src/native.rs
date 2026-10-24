@@ -41,6 +41,7 @@ pub enum Action {
     DownloadDirectoryChosen(Result<Option<PathBuf>, String>),
     FilesOpened(u64, Result<(), String>),
     HistoryFolderOpened(Result<(), String>),
+    HistoryFileOpened(Result<(), String>),
     FileDrag(bool),
     ShellError(String),
     Quit,
@@ -509,6 +510,33 @@ impl Shell {
                 })()
                 .map_err(|error| format!("{error:#}"));
                 let _ = tx.send(Action::HistoryFolderOpened(result));
+            })?;
+        Ok(())
+    }
+
+    pub fn open_history_file(&self, path: PathBuf) -> Result<()> {
+        let owner = self.hwnd.0 as usize;
+        let tx = ACTIONS.get().unwrap().clone();
+        std::thread::Builder::new()
+            .name("omdrop-history-file".into())
+            .spawn(move || {
+                let result = (|| -> Result<()> {
+                    let file: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+                    let mut info = SHELLEXECUTEINFOW {
+                        cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
+                        fMask: SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI,
+                        hwnd: HWND(owner as *mut _),
+                        lpVerb: w!("open"),
+                        lpFile: PCWSTR(file.as_ptr()),
+                        nShow: SW_SHOWNORMAL.0,
+                        ..Default::default()
+                    };
+                    unsafe { ShellExecuteExW(&mut info) }
+                        .with_context(|| format!("无法打开文件 {}", path.display()))?;
+                    Ok(())
+                })()
+                .map_err(|error| format!("{error:#}"));
+                let _ = tx.send(Action::HistoryFileOpened(result));
             })?;
         Ok(())
     }
