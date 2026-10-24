@@ -20,6 +20,8 @@ throughput still need device validation. See the
 
 [中文说明](README.zh-CN.md) · [Quick start](docs/QUICKSTART.md) · [Development guide](docs/DEVELOPMENT.md)
 
+Video demonstration: [Watch on YouTube](https://youtu.be/8IJywijJMYU)
+
 ## Engineering
 
 - **Native desktop and Windows integration**: GPUI transfer UI, tray, Explorer context menus

@@ -8,6 +8,8 @@
 
 [English](README.md) · [快速开始](docs/QUICKSTART.zh-CN.md) · [开发指南](docs/DEVELOPMENT.zh-CN.md)
 
+视频演示：[在 YouTube 上观看](https://youtu.be/8IJywijJMYU)
+
 ## 工程实现
 
 - **原生桌面与系统集成**：使用 GPUI 构建收发界面，接入托盘、文件右键与资源管理器拖放；普通权限 UI 与高权限服务分离，兼顾桌面交互和设备管理。
