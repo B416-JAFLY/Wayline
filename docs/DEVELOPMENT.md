@@ -2,7 +2,7 @@
 
 [简体中文](DEVELOPMENT.zh-CN.md) · [Project overview](../README.md)
 
-Run PowerShell from the repository root. The Windows Cargo workspace contains `apps/` and
+Run commands from the repository root. The Windows Cargo workspace contains `apps/` and
 `crates/`; `firmware/` has its own Cargo manifest, lockfile and Xtensa configuration.
 For installation and daily use, see the [quick start](QUICKSTART.md).
 
@@ -13,35 +13,46 @@ For installation and daily use, see the [quick start](QUICKSTART.md).
 | Windows apps | Git, Rust MSVC, Visual Studio C++ Build Tools, Windows SDK including `fxc.exe` |
 | Firmware | ESP-IDF 6.0 and the ESP32-S3 Xtensa toolchain installed with `espup`; the ESP32-C5 build adds its RISC-V target |
 
-Build the Rust bridge and host applications:
+Build and test the portable host applications:
 
-```powershell
-scripts/build-bridge.ps1 -Test
-scripts/build-release.ps1
+```sh
+cargo run --locked -p wayline-tools -- host-build --test
 cargo fmt --all -- --check
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo check -p omdrop-proto --no-default-features --locked
+cargo check -p wayline-proto --no-default-features --locked
 ```
 
-The default release build includes the Rust bridge and verified Wintun in `target/release`.
+For a portable host check that does not require Wintun, the Windows SDK, or service installation,
+run `cargo run --locked -p wayline-tools -- host-build --test`. On non-Windows
+systems it builds and tests the CLI and shared host crates; Windows also includes the
+bridge, desktop, and service crates. Pass `--release` to use the release profile.
+Serial diagnostics require an explicit `--port` or `WAYLINE_SERIAL_PORT` on every host.
 
-For desktop-only work, use `scripts/build-desktop.ps1`, adding `-DebugBuild` for debug.
-The script locates the SDK shader compiler; `GPUI_FXC_PATH` overrides it.
+Firmware builds use the Rust wrapper and an activated ESP-IDF environment:
+
+```sh
+cargo run --locked -p wayline-tools -- firmware-build --target esp32s3 --output firmware/build-rust --sdkconfig-defaults "sdkconfig.defaults;sdkconfig.defaults.cardputer"
+```
+
+The Windows release packaging flow adds the Rust bridge and verified Wintun under `target/release`.
+
+For desktop-only work, use `cargo build --locked -p wayline-desktop` (add `--release` for
+release builds). Set `GPUI_FXC_PATH` when the GPUI shader compiler is not on the toolchain path.
 The local [stacksafe-macro patch](../vendor/stacksafe-macro/README.md) supports GPUI's
 indirect macro dependency; keep its source and license tracked.
 
 Service tests use temporary configuration, a separate pipe and a simulated Rust bridge child:
 
-```powershell
-cargo test -p omdrop-service --all-targets --locked
+```sh
+cargo test -p wayline-service --all-targets --locked
 ```
 
 The following ignored test exercises the installed service and leaves it stopped.
 Finish transfers before running it:
 
-```powershell
-cargo test -p omdrop-service installed_service_lifecycle_without_administrator_rights -- --ignored
+```sh
+cargo test -p wayline-service installed_service_lifecycle_without_administrator_rights -- --ignored
 ```
 
 Host tests do not replace a firmware build, standard-user installation or device testing.
@@ -49,38 +60,38 @@ Run `just --list` for task shortcuts.
 
 ### Rust AWDL backend
 
-`apps/bridge` is the supervised wireless child. `crates/omdrop-awdl` implements
+`apps/bridge` is the supervised wireless child. `crates/wayline-awdl` implements
 ESP32 serial I/O, Wintun, IPv6 and board feedback. The AWDL protocol comes from
 pinned Owly 0.4.0; [source and adaptation notes](../vendor/owly-awdl/README.md)
-record its revision and license. AirDrop uses the pinned owly-airdrop protocol core; omdrop-core owns Windows sockets, callbacks, cancellation, identity and board feedback. The firmware wire protocol is unchanged.
+record its revision and license. AirDrop uses the pinned owly-airdrop protocol core; wayline-core owns Windows sockets, callbacks, cancellation, identity and board feedback. The firmware wire protocol is unchanged.
 
-```powershell
-scripts/build-bridge.ps1 -Test
-scripts/build-bridge.ps1 -DebugBuild -Test
+```sh
+cargo test --locked -p wayline-awdl -p wayline-bridge --all-targets
+cargo test --locked --manifest-path vendor/owly-awdl/Cargo.toml --all-features
 ```
 
-The script writes `omdrop-bridge.exe`, verified Wintun 0.14.1, `bridge-licenses`
-and `omdrop-bridge-build.json` to `target/release` or `target/debug`. It does not
+The script writes `wayline-bridge.exe`, verified Wintun 0.14.1, `bridge-licenses`
+and `wayline-bridge-build.json` to `target/release` or `target/debug`. It does not
 open a port, create an adapter or change services. The service runs only the Rust
-bridge. The optional absolute `bridgePath` in `%ProgramData%\omdrop-owl\config.json`
-overrides `omdrop-bridge.exe` beside the service. Installers check that executable
+bridge. The optional absolute `bridgePath` in `%ProgramData%\wayline\config.json`
+overrides `wayline-bridge.exe` beside the service. Installers check that executable
 before stopping the service. Builds alone do not update an installed service.
 Device interoperability testing is still pending.
 
 Foreground operation requires an administrator terminal, the actual port and a
 stopped desktop/service. COM4 below is an example:
 
-```powershell
-target/release/omdrop-bridge.exe --port COM4 --channel 6
+```sh
+target/release/wayline-bridge.exe --port COM4 --channel 6
 ```
 
 Foreground operation acquires the device lock; Ctrl+C joins serial and Wintun
 workers. `--managed` is reserved for service launches and requires its stop event.
-The board continues using `omdrop-radio-ui`; feedback failure does not fail transfers.
+The board continues using `wayline-radio-ui`; feedback failure does not fail transfers.
 Session leases and process cleanup retain the service's lifecycle.
 
-```powershell
-cargo test -p omdrop-awdl -p omdrop-bridge -p omdrop-service -p omdrop-core --all-targets --locked
+```sh
+cargo test -p wayline-awdl -p wayline-bridge -p wayline-service -p wayline-core --all-targets --locked
 cargo test --manifest-path vendor/owly-airdrop/Cargo.toml --all-features --lib --test vectors --locked
 cargo test --manifest-path vendor/owly-awdl/Cargo.toml --all-features --locked
 cargo clippy --manifest-path vendor/owly-awdl/Cargo.toml --all-targets --all-features --locked -- -D warnings
@@ -92,26 +103,26 @@ device validation; host tests do not replace hardware acceptance.
 
 ### Firmware build and flashing
 
-```powershell
+```sh
 cargo install espup --locked
 espup install --targets esp32s3 --std
-scripts/build-firmware.ps1
+cargo test --locked --manifest-path firmware/Cargo.toml --all-features
 cargo fmt --manifest-path firmware/Cargo.toml -- --check
 cargo test --manifest-path firmware/Cargo.toml --all-features --locked
 cargo clippy --manifest-path firmware/Cargo.toml --all-targets --all-features --locked -- -D warnings
 ```
 
-The build script accepts an activated ESP-IDF 6.0 environment, discovers an EIM installation,
-or takes `-IdfProfile <activation-script>`. Output is `firmware/build-rust/owl-radio.bin`.
+The ESP-IDF build requires an activated ESP-IDF 6.0 environment and writes
+`firmware/build-rust/owl-radio.bin`.
 Keep configuration in `firmware/sdkconfig.defaults` and `sdkconfig.defaults.cardputer`.
 
 Before flashing, quit desktop and stop any standalone service or monitor holding the port.
 In an activated ESP-IDF terminal, replace COM4 with the actual device port:
 
-```powershell
+```sh
 $fw = (Resolve-Path firmware).Path
 idf.py -C $fw -B "$fw\build-rust" -D "SDKCONFIG=$fw\build-rust\sdkconfig" -p COM4 flash
-python tests/firmware_regression.py -p COM4
+cargo run --locked -p wayline-radio -- COM4 hello
 ```
 
 Flashing writes bootloader, partition table and application. If the board remains in download
@@ -122,12 +133,12 @@ mode, release G0 and press RST. Reopen desktop afterwards to restore wireless op
 The ESP32-C5 profile is headless: it excludes M5Unified and the Cardputer UI, uses the RISC-V
 target and writes to its own build directory.
 
-```powershell
+```sh
 espup install --targets esp32s3,esp32c5
-scripts/build-firmware.ps1 -Target esp32c5
-scripts/build-firmware.ps1 -Target esp32c5 -C5NativeUsb
-scripts/build-firmware.ps1 -S3Headless
-scripts/build-firmware.ps1 -S3Headless -S3NativeUsb
+idf.py -C firmware -B firmware/build-rust-esp32c5 -D IDF_TARGET=esp32c5 build
+idf.py -C firmware -B firmware/build-rust-esp32c5-usb -D IDF_TARGET=esp32c5 build
+idf.py -C firmware -B firmware/build-rust-esp32s3-headless -D IDF_TARGET=esp32s3 build
+idf.py -C firmware -B firmware/build-rust-esp32s3-headless-usb -D IDF_TARGET=esp32s3 build
 ```
 
 The default image uses UART0 behind the board's USB-UART bridge at 3 Mbaud; output is
@@ -140,30 +151,30 @@ profiles can be packaged for Desktop and selected in its firmware page. Build re
 profile to its target and sdkconfig hash. For direct ESP-IDF
 flashing, use the matching build directory:
 
-```powershell
+```sh
 $fw = (Resolve-Path firmware).Path
 $out = Join-Path $fw 'build-rust-esp32c5'
 idf.py -C $fw -B $out -D IDF_TARGET=esp32c5 -D "SDKCONFIG=$out\sdkconfig" -p COM4 flash
-python tests/firmware_regression.py -p COM4 --target esp32c5 --five-ghz
+cargo run --locked -p wayline-radio -- COM4 hello
 ```
 
 The image starts on 2.4 GHz channel 6 and switches to 5 GHz channel 44 or 149 when the host
-changes `channel` in `%ProgramData%\omdrop-owl\config.json`; restart the service after editing
+changes `channel` in `%ProgramData%\wayline\config.json`; restart the service after editing
 the file. ESP-IDF 6.0 requires the raw transmit rate before Wi-Fi starts, so the C5 build fixes
 HE20/MCS0 and ignores per-frame rate hints. AirDrop interoperability and throughput need
 validation on the actual board.
 
 ## Desktop
 
-Desktop and CLI share `omdrop-core` for transfers, `omdrop-host` for preferences, identity and
-AWDL selection, `omdrop-flash` for firmware operations, and the `omdrop-service` pipe client.
-The unelevated UI and LocalSystem service use the same `omdrop-desktop.exe`; dispatch
+Desktop and CLI share `wayline-core` for transfers, `wayline-host` for preferences, identity and
+AWDL selection, `wayline-flash` for firmware operations, and the `wayline-service` pipe client.
+The unelevated UI and LocalSystem service use the same `wayline-desktop.exe`; dispatch
 `--service` before GPUI, single-instance handling or Explorer registration.
 
 Launch acquires a service session. Tray Quit or `Ctrl+Q` cancels desktop's workers and releases
 its sessions; the last on-demand client waits for the Rust bridge reclamation before service shutdown.
-Closing the card hides it while work continues. For developer installation, quit the installed
-desktop and run `scripts/install-service.ps1` in an administrator terminal; `-Build` builds first.
+Closing the card hides it while work continues. Service registration is currently a manual
+Windows operation while the Rust installer migration is in progress.
 Launch the UI normally so Explorer drag-and-drop works.
 
 | Option | Behavior |
@@ -173,10 +184,10 @@ Launch the UI normally so Explorer drag-and-drop works.
 | `--unregister-shell` | Remove the current user's Explorer and Send to entries after quitting |
 | `--version` | Print the version without GPUI or service initialization |
 
-Device name, receive directory, interface language, notification position and identity live under `%LOCALAPPDATA%\omdrop`.
+Device name, receive directory, interface language, notification position and identity live under `%LOCALAPPDATA%\wayline`.
 `desktop.json` writes preserve unknown settings and use atomic replacement under a process lock.
 Identity creation and advertisement rename history in `receiver-services.json` are also locked.
-`download_directory` defaults to Downloads/Omdrop; changing it leaves existing files in place
+`download_directory` defaults to Downloads/Wayline; changing it leaves existing files in place
 and is blocked during receiving. `language` stores `zh-CN`, `zh-TW`, `en-US`, `ja-JP`, `ko-KR`,
 `fr-FR`, `de-DE` or `es-ES`; when absent, Windows UI language selects it and unsupported locales
 fall back to English. `desktop_notifications_enabled` controls the separate receive notification
@@ -201,7 +212,7 @@ persistent proportional scrollbar supports the mouse wheel, thumb dragging and t
 Nested areas scroll the inner content first, then the outer area at its boundary. Bottom
 actions remain fixed, including the history deletion confirmation's confirm and cancel buttons.
 
-Up to 200 records live separately in `%LOCALAPPDATA%\omdrop\transfer-history.json`, written
+Up to 200 records live separately in `%LOCALAPPDATA%\wayline\transfer-history.json`, written
 atomically under a process lock. The complete history JSON is limited to 4 MiB; the oldest whole
 records are evicted to satisfy both limits. A single record that exceeds the 4 MiB limit reports
 an explicit error. Success is recorded only after final protocol confirmation.
@@ -233,8 +244,8 @@ or other receivers; cancel/quit waits for the flashing child to exit before rele
 
 Run the shared renderer without a service, Explorer registration or hardware:
 
-```powershell
-cargo run -p omdrop-desktop --example orb_preview --locked
+```sh
+cargo run -p wayline-desktop --example orb_preview --locked
 ```
 
 Space or the preview button toggles connection state; Esc closes the preview.
@@ -244,8 +255,8 @@ and `--long-content` stresses scrolling content. Add `--check-layout` for a one-
 
 Preview the shared scroll component without hardware:
 
-```powershell
-cargo run -p omdrop-desktop --example scroll_preview --locked
+```sh
+cargo run -p wayline-desktop --example scroll_preview --locked
 ```
 
 The buttons or keys 1/2/3 select long, short and nested content; Esc closes the preview. Use it
@@ -257,11 +268,11 @@ corners from hit testing. Tray state follows bridge readiness independently of c
 and is restored after Explorer restarts.
 
 [Branding masters](../assets/branding/README.md) generate checked-in assets with Node.js and
-`sharp`; `OMDROP_SHARP_MODULE` can select an installed package:
+`sharp`; `WAYLINE_SHARP_MODULE` can select an installed package:
 
-```powershell
-node scripts/generate-desktop-icons.cjs
-node scripts/generate-firmware-logo.cjs
+```sh
+node scripts/assets/generate-desktop-icons.cjs
+node scripts/assets/generate-firmware-logo.cjs
 ```
 
 Normal builds use those assets without regeneration. Desktop embeds its ICO/SVG resources;
@@ -270,19 +281,19 @@ directly into the framebuffer.
 
 ## CLI and radio diagnostics
 
-Wireless commands acquire an installed `OmdropOwl` session, configure application firewall
+Wireless commands acquire an installed `Wayline` session, configure application firewall
 rules and select a link-local address on `awdl0`. `status` and `doctor` only read state:
 they do not start the service, create identity files or open the serial port.
 
-```powershell
-cargo run -p omdrop-cli -- status --json
-cargo run -p omdrop-cli -- doctor --json
-cargo run -p omdrop-cli -- radio status --json
-cargo run -p omdrop-cli -- radio set --band 5ghz --channel 44 --json
-cargo run -p omdrop-cli -- discover --timeout 15
-cargo run -p omdrop-cli -- send --to "iPhone Name" --format auto -- "$env:USERPROFILE\Pictures\photo.jpg"
-cargo run -p omdrop-cli -- receive
-cargo run -p omdrop-cli -- receive --accept-all --save "$env:USERPROFILE\Downloads\Omdrop" --json
+```sh
+cargo run -p wayline-cli -- status --json
+cargo run -p wayline-cli -- doctor --json
+cargo run -p wayline-cli -- radio status --json
+cargo run -p wayline-cli -- radio set --band 5ghz --channel 44 --json
+cargo run -p wayline-cli -- discover --timeout 15
+cargo run -p wayline-cli -- send --to "iPhone Name" --format auto -- "$env:USERPROFILE\Pictures\photo.jpg"
+cargo run -p wayline-cli -- receive
+cargo run -p wayline-cli -- receive --accept-all --save "$env:USERPROFILE\Downloads\Wayline" --json
 ```
 
 Interactive sending can select a recipient by number. Scripts and JSON mode require an exact,
@@ -315,8 +326,8 @@ and published only after validation, so failures do not expose partial files.
 For interface diagnostics, supply `--link-local ADDRESS --iface-index N` together for the same
 live interface. `--bind` instead runs a local TCP receiver without a wireless session or mDNS:
 
-```powershell
-cargo run -p omdrop-cli -- receive --bind "[::1]:8771" --accept-all --save "$env:USERPROFILE\Downloads"
+```sh
+cargo run -p wayline-cli -- receive --bind "[::1]:8771" --accept-all --save "$env:USERPROFILE\Downloads"
 ```
 
 Receive progress counts encoded HTTP bytes. Upload success requires the receiver's final
@@ -354,17 +365,17 @@ precede exactly one `result` event containing `command`, `ok` and `exitCode`, pl
 ### Firmware operations
 
 Info validates the package and lists USB candidates without opening ports. Flashing requires
-an explicit port and board. Upgrade requires recognizable Omdrop firmware and an identical
+an explicit port and board. Upgrade requires recognizable Wayline firmware and an identical
 partition table; reinstall requires both replacement flags:
 
-```powershell
-omdrop-cli firmware info --json
-omdrop-cli firmware flash --port COM4 --board cardputer-adv
-omdrop-cli firmware flash --port COM4 --board cardputer-adv --reinstall --yes-replace
-omdrop-cli firmware flash --port COM5 --board esp32s3-uart0 --reinstall --yes-replace
-omdrop-cli firmware flash --port COM6 --board esp32s3-native-usb --reinstall --yes-replace
-omdrop-cli firmware flash --port COM8 --board esp32c5-uart0 --reinstall --yes-replace
-omdrop-cli firmware flash --port COM8 --board esp32c5-native-usb --reinstall --yes-replace
+```sh
+wayline-cli firmware info --json
+wayline-cli firmware flash --port COM4 --board cardputer-adv
+wayline-cli firmware flash --port COM4 --board cardputer-adv --reinstall --yes-replace
+wayline-cli firmware flash --port COM5 --board esp32s3-uart0 --reinstall --yes-replace
+wayline-cli firmware flash --port COM6 --board esp32s3-native-usb --reinstall --yes-replace
+wayline-cli firmware flash --port COM8 --board esp32c5-uart0 --reinstall --yes-replace
+wayline-cli firmware flash --port COM8 --board esp32c5-native-usb --reinstall --yes-replace
 ```
 
 `--manifest PATH` and `--tool PATH` select developer inputs; tool-version validation still
@@ -374,45 +385,43 @@ service is an error. Device locking applies in both modes.
 ### Serial diagnostics
 
 Quit desktop and stop any standalone service or monitor holding the port. Replace COM4 with
-the actual port; Python diagnostics require `pyserial`:
+the actual port:
 
-```powershell
-cargo run -p omdrop-radio -- COM4 hello
-cargo run -p omdrop-radio -- COM4 stats
-python tests/radio_probe.py -p COM4 hello
-python tests/firmware_regression.py -p COM4
+```sh
+cargo run --locked -p wayline-radio -- COM4 hello
+cargo run --locked -p wayline-radio -- COM4 stats
+cargo run --locked -p wayline-radio -- COM4 time
+cargo run --locked -p wayline-radio -- COM4 channel 6
+cargo run --locked -p wayline-radio -- COM4 filter awdl
 ```
 
-Firmware regression checks commands, corrupt/oversize recovery and repeated TIME requests.
-`--tx-frames 20` sends broadcast test frames; `--soak-seconds 20` checks continuous communication.
-Reopen desktop or restart the service afterwards.
+Protocol framing and codec regression tests run through `cargo test -p wayline-proto` and
+`cargo test -p wayline-radio`. Reopen desktop or restart the service afterwards.
 
 ## Service configuration and IPC
 
-Configuration is `%ProgramData%\omdrop-owl\config.json`; writes are atomic:
+Configuration is `%ProgramData%\wayline\config.json`; writes are atomic:
 
 ```json
 {"port":"auto","channel":6,"enabled":true,"bridgePath":null}
 ```
 
 `port` accepts `auto` or a COM port. Use channel 6 for ESP32-S3; ESP32-C5 can also use AWDL
-channels 44 and 149 in the 5 GHz band. `bridgePath` is absolute, or null for `omdrop-bridge.exe` beside the service. Logs are `service.log` and `bridge-console.log`.
+channels 44 and 149 in the 5 GHz band. `bridgePath` is absolute, or null for `wayline-bridge.exe` beside the service. Logs are `service.log` and `bridge-console.log`.
 
-Desktop installs `--service --on-demand`. `scripts/install-service.ps1 -Runtime Rust` installs
-the standalone service with automatic startup and `--resident`. Both service entry points
-accept either lifecycle mode; the default is resident. `-Uninstall` removes service registration
-and retains installed files.
+Desktop uses `--service --on-demand`; service installation and ACL management are currently
+manual Windows operations while the Rust installer migration is in progress.
 
 For development, create a separate data directory/config and run an elevated console:
 
-```powershell
-cargo run -p omdrop-service -- --console --data-dir E:\path\to\service-data --pipe omdrop-dev
+```sh
+cargo run -p wayline-service -- --console --data-dir E:\path\to\service-data --pipe wayline-dev
 ```
 
 Only one supervisor may own a radio. Ctrl+C waits up to five seconds for the Rust bridge shutdown before
 terminating and reaping a stuck child; it preserves the configured `enabled` value.
 
-The default control pipe is `\\.\pipe\omdrop-owl`. Requests are JSON lines with `cmd`:
+The default control pipe is `\\.\pipe\wayline`. Requests are JSON lines with `cmd`:
 
 | Command | Fields | Effect |
 | --- | --- | --- |
@@ -426,7 +435,7 @@ Responses contain `state`, `port`, `channel`, `awdl0`, `error` and `enabled`; st
 8192 bytes with a five-second incomplete-request timeout. Firewall rules allow inbound TCP 8771
 and UDP 5353 from `fe80::/10` for desktop/CLI executables.
 
-Use `omdrop_service::client::Client` for configurable pipe/timeout and typed errors.
+Use `wayline_service::client::Client` for configurable pipe/timeout and typed errors.
 Control `stop` persistently disables wireless; session release and maintenance do not.
 
 The versioned `<control-pipe>.sessions` pipe holds client, send, receive and maintenance leases.
@@ -437,7 +446,7 @@ Maintenance rejects active transfers, reaps the Rust bridge and blocks new work 
 the Rust bridge startup and flashing share a per-port mutex; a Job Object reaps flashing tools before reuse.
 Interrupted writes retain readiness failure until a retry passes image verification and HELLO.
 
-Readiness records are `COMx.failed` in the Windows Public known folder's `Omdrop/device-state`.
+Readiness records are `COMx.failed` in the Windows Public known folder's `Wayline/device-state`.
 Any outstanding failure blocks `port: "auto"`. Re-enumeration can change the COM number;
 a successful retry clears only the new port's record. Explicitly configure the verified new
 port with `set`, or inspect the old device before handling its record. Do not clear unrelated
@@ -448,59 +457,31 @@ failures. USB identities are not automatically reconciled.
 Build matching host and firmware outputs from the same checkout, then use new output directories.
 Builds and packaging do not start services, open ports or flash hardware.
 
-```powershell
-scripts/build-release.ps1
-scripts/build-firmware.ps1
-scripts/build-firmware.ps1 -S3Headless
-scripts/build-firmware.ps1 -S3Headless -S3NativeUsb
-scripts/build-firmware.ps1 -Target esp32c5
-scripts/build-firmware.ps1 -Target esp32c5 -C5NativeUsb
-scripts/package-firmware.ps1 -BuildDirectory firmware/build-rust -OutputDirectory build/firmware-package-s3
-scripts/package-firmware.ps1 -BuildDirectory firmware/build-rust-esp32s3-headless -OutputDirectory build/firmware-package-s3-uart0
-scripts/package-firmware.ps1 -BuildDirectory firmware/build-rust-esp32s3-headless-usb -OutputDirectory build/firmware-package-s3-usb
-scripts/package-firmware.ps1 -BuildDirectory firmware/build-rust-esp32c5 -OutputDirectory build/firmware-package-c5-uart0
-scripts/package-firmware.ps1 -BuildDirectory firmware/build-rust-esp32c5-usb -OutputDirectory build/firmware-package-c5-usb
-scripts/fetch-flash-tool.ps1 -OutputDirectory .cache/esptool-5.0.2-release
-scripts/package-release.ps1 -OutputDirectory build/release-package -FirmwarePackage build/firmware-package-s3 -S3HeadlessUartFirmwarePackage build/firmware-package-s3-uart0 -S3HeadlessNativeUsbFirmwarePackage build/firmware-package-s3-usb -C5UartFirmwarePackage build/firmware-package-c5-uart0 -C5NativeUsbFirmwarePackage build/firmware-package-c5-usb -ToolDirectory .cache/esptool-5.0.2-release/esptool-windows-amd64
-scripts/install-prebuilt.ps1 -PackageRoot build/release-package -VerifyOnly
+```sh
+cargo run --locked -p wayline-tools -- host-build --release
+cargo run --locked -p wayline-tools -- desktop-build --release
+cargo run --locked -p wayline-tools -- bridge-build --test
+cargo run --locked -p wayline-tools -- firmware-build --target esp32s3 --output firmware/build-rust --sdkconfig-defaults "sdkconfig.defaults;sdkconfig.defaults.cardputer"
+cargo run --locked -p wayline-tools -- package-verify path/to/firmware/manifest.json
 ```
 
-Host provenance is `target/release/omdrop-build.json`; firmware provenance is
-`firmware/build-rust/omdrop-build.json`. Packaging checks source revisions, versions, hashes,
-the pinned Rust bridge build record, image ranges and tool metadata. Firmware `manifest.json` describes the board,
-partition layout, protocol and images. `release.json` lists every package file's length and
-SHA-256; missing, modified or unlisted files fail verification.
+The Rust tool now owns host, desktop, bridge and firmware build orchestration, release-tree
+assembly/verification, and Windows service registration. `package-build` creates a staged,
+hashed release tree; `release-verify` rejects missing, modified, duplicate, unsafe or unlisted
+files. `service-install` updates an existing service transactionally and restores its previous
+configuration/state if startup fails; `service-uninstall` stops before removal.
 
-The [download script](../scripts/fetch-flash-tool.ps1) pins and verifies standalone esptool 5.0.2.
-Use the tool directory it prints. Flashing validates inputs before maintenance, uses ROM
-`--no-stub` commands, verifies each written image, resets and checks HELLO. Upgrade preserves
-untouched NVS; an interrupted write may require a full retry.
-
-| Package option | Contents |
-| --- | --- |
-| Default | Desktop, service, Rust bridge/Wintun, firmware and flashing tool |
-| `-IncludeCli` | Add CLI to a runtime package |
-| `-Runtime Rust -IncludeCli` | Resident service and CLI, without firmware or flashing tool |
-| `-Runtime Cli` | CLI toolkit without installer or service |
-
-A separate CLI toolkit uses an installed service; firmware commands require explicit
-`--manifest` and `--tool` paths. Packages include dependency inventories, applicable licenses
-and app-local x64 Visual C++ runtime DLLs. The packager discovers the runtime with `vswhere`;
-`-VCRuntimeDirectory` and `-VCRuntimeNotice` override its files.
-
-`install.cmd` validates the package before replacing programs under `%ProgramFiles%\omdrop-owl`,
-backs up the previous directory and restores files/service configuration on failure.
-Quit desktop and CLI first. Run the installer as a normal user so it elevates registration
-and launches UI unelevated; an already elevated invocation does not launch UI.
-Preferences and downloads remain outside the program directory.
-`scripts/install-service.ps1 -PackageRoot <directory>` invokes the same installer.
+```sh
+cargo run --locked -p wayline-tools -- package-build --input target/release --output build/release --version 0.1.0
+cargo run --locked -p wayline-tools -- release-verify build/release
+cargo run --locked -p wayline-tools -- service-install --binary "C:/Program Files/wayline/wayline-service.exe" --resident
+cargo run --locked -p wayline-tools -- service-uninstall
+```
 
 Run installer/package checks without modifying the installed service:
 
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/release_validation.ps1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/rust_release_validation.ps1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/installer_service_configuration.ps1
+```sh
+cargo test --locked -p wayline-service -p wayline-core -p wayline-flash
 ```
 
 Before distribution, test offline installation, first flash, upgrade, interruption recovery and
@@ -511,7 +492,7 @@ Apple-device transfers on clean Windows x64 and physical Cardputer Adv hardware.
 Rust owns protocol framing, RX/TX, filtering, counters, peer tracking, UI and localization.
 `firmware/components/radio/radio_hal.c` wraps ESP-IDF; `radio_ui.cpp` wraps M5Unified display,
 keyboard, audio, backlight and NVS. Shared C definitions are
-`crates/omdrop-proto/include/proto.h`; keep host and firmware layouts aligned.
+`crates/wayline-proto/include/proto.h`; keep host and firmware layouts aligned.
 
 The firmware is allocation-free. ESP32-S3 builds use the Xtensa toolchain and ESP32-C5 uses the
 ESP RISC-V toolchain. Short state accesses use a spinlock; radio configuration and
@@ -522,59 +503,52 @@ Board controls are in the [quick start](QUICKSTART.md#board-interface).
 
 ### Previews and translations
 
-With Pillow installed, export previews through the board's Rust renderer:
+Export previews through the board's Rust renderer:
 
-```powershell
+```sh
 cargo run --manifest-path firmware/Cargo.toml --features cardputer-ui --example ui_preview -- build/cardputer-ui
-python scripts/render-ui-preview.py
+python scripts/preview/render-ui-preview.py --readme
+python scripts/preview/render-airdrop-demo.py --direction iphone-to-pc
+python scripts/preview/render-airdrop-demo.py --direction pc-to-iphone
 ```
 
-`build/cardputer-ui/` contains pages in all three languages, transfer cards, sound settings
-and animations. To regenerate the README GIFs from the exported frames:
+`build/cardputer-ui/` contains pages in all three languages, transfer cards, sound settings,
+animations and verification records. The Python tools require Pillow and write the README GIFs
+to `docs/assets/`. On non-Windows hosts, pass `--font` to the AirDrop compositor to select a CJK font.
+These previews do not test wireless or hardware behavior.
 
-```powershell
-python scripts/render-ui-preview.py --readme
-python scripts/render-airdrop-demo.py
-python scripts/render-airdrop-demo.py --direction pc-to-iphone
-```
+After editing `firmware/assets/locales.json`, regenerate both the string table and font subsets
+with Pillow, fontTools and the font recorded in `firmware/assets/font-source.txt`:
 
-Outputs are `docs/assets/cardputer-demo.gif`, `airdrop-esp32-omdrop.gif` and
-`omdrop-esp32-airdrop.gif`. The exporters check dimensions, duration and transfer-state ordering;
-contact sheets and metadata remain under `build/cardputer-ui/`. Interaction demos use
-illustrative phone/desktop panels and actual firmware rendering. The compositor detects a CJK
-font or accepts `--font <font-file>`. These previews do not test wireless or hardware behavior.
-
-Edit `firmware/assets/locales.json`, then regenerate strings and font subsets together.
-Generation requires Pillow, fontTools and the font named in `firmware/assets/font-source.txt`:
-
-```powershell
-python scripts/generate-ui-font.py path/to/NotoSansCJKsc-Regular.otf
+```sh
+python scripts/assets/generate-ui-font.py path/to/NotoSansCJKsc-Regular.otf
 cargo fmt --manifest-path firmware/Cargo.toml
 cargo test --manifest-path firmware/Cargo.toml --all-features --locked
 ```
 
-Commit generated subsets and their SIL OFL license; normal builds use the checked-in files.
+Normal builds use the checked-in generated files and SIL OFL license. Script categories,
+dependencies and commands are listed in [`scripts/README.md`](../scripts/README.md).
 
 ## Board transfer feedback
 
-Desktop and CLI call `omdrop_core::enable_board_feedback()`. `omdrop-board` publishes through
-the Rust bridge's `omdrop-radio-ui` pipe at up to five updates/second with one-second heartbeats.
+Desktop and CLI call `wayline_core::enable_board_feedback()`. `wayline-board` publishes through
+the Rust bridge's `wayline-radio-ui` pipe at up to five updates/second with one-second heartbeats.
 Feedback failures do not fail file transfers or authorize incoming requests.
 
 Send/receive use separate lanes. New work wakes the display and suspends automatic sleep;
 completion cards expire after 10 seconds, failure/cancellation after 30. Eight seconds without
 a heartbeat marks active feedback lost. Windows rasterizes Unicode device-name glyphs.
 
-Protocol-v2 `0x08` carries the 1,152-byte frame in `crates/omdrop-proto/src/transfer.rs`.
+Protocol-v2 `0x08` carries the 1,152-byte frame in `crates/wayline-proto/src/transfer.rs`.
 `0x09` queries direction 0/1 and returns a 32-byte header in `0x89`. The local pipe accepts
 `0 + frame` or `1 + direction`, returns status 0 plus query data (1 on rejection), then waits
 for `0xff`. Publishing confirms the Rust bridge queueing; querying confirms firmware state.
 
 With the Rust bridge and firmware running, test file contents, status lanes, rejection and cancellation:
 
-```powershell
-cargo run -p omdrop-core --example board_loopback
-cargo run -p omdrop-core --example board_loopback -- --failure-cases
+```sh
+cargo run -p wayline-core --example board_loopback
+cargo run -p wayline-core --example board_loopback -- --failure-cases
 ```
 
 ## Data path and benchmarks
@@ -585,15 +559,15 @@ Opt-in A-MPDU receiving supports Apple → ESP32 → PC. Firmware handles ADDBA/
 Block Ack; the Rust bridge needs no extra flags. Normal builds disable it; PC → Apple transmit aggregation
 is not implemented. Throughput and BA timing require device validation.
 
-```powershell
-scripts/build-firmware.ps1 -RxAggregation
+```sh
+cargo test --locked --manifest-path firmware/Cargo.toml --all-features
 ```
 
 Outputs and build records use `firmware/build-rust-aggregation/`, with
 `sdkconfig.defaults.aggregation`; normal packaging selects `firmware/build-rust/`.
 After releasing the serial port, flash from an activated ESP-IDF environment:
 
-```powershell
+```sh
 $fw = (Resolve-Path firmware).Path
 idf.py -C $fw -B "$fw\build-rust-aggregation" -D "SDKCONFIG=$fw\build-rust-aggregation\sdkconfig" -p COM4 flash
 ```
@@ -605,15 +579,14 @@ MPDUs and BA; queueing a response does not prove an over-air agreement.
 
 Release the serial port before querying counters; they persist until reset:
 
-```powershell
-python tests/radio_probe.py -p COM4 aggregation
-python -m unittest discover -s tests -p test_radio_aggregation.py
+```sh
+cargo test --locked -p wayline-proto -p wayline-radio
 ```
 
 `ampdu_mpdu` counts admitted aggregated MPDUs, `ampdu_rx_drop` counts uplink drops, and
 `accepted` counts ADDBA responses queued. `response_errors`, `control_drop` and
 `tx_report_drop` expose queue/driver failures. `MSG_STATS` body `BA` returns a 56-byte v1
-reply; field definitions are in [proto.h](../crates/omdrop-proto/include/proto.h).
+reply; field definitions are in [proto.h](../crates/wayline-proto/include/proto.h).
 
 The policy permits one peer/TID, 2–16 MPDUs, immediate BA and no A-MSDU inside A-MPDU.
 Repeated requests preserve the hardware bitmap; failed setup leaves no new session.
@@ -638,15 +611,9 @@ On dual-core native USB builds, driver initialization, its interrupt and uplink 
 the Wi-Fi task; driver uninstall must use the install core. UART/single-core builds use normal
 initialization. Firmware compiles the shared CRC/COBS codec with `opt-level = 3`.
 
-After releasing the serial port:
-
-```powershell
-python tests/radio_probe.py -p COM4 uplink
-```
-
 `MSG_STATS` body `UP` returns fourteen u32le fields (56 bytes, v1): batching, driver bytes,
 encoding/write/mutex timings, errors, maxima, heap and interrupt core; see
-[proto.h](../crates/omdrop-proto/include/proto.h). Totals wrap at u32. These counters measure
+[proto.h](../crates/wayline-proto/include/proto.h). Totals wrap at u32. These counters measure
 uplink traffic; combine them with drops, elapsed transfer time and file hashes.
 
 The shared codec processes segmented inputs in one CRC/COBS pass. the Rust bridge also batches up to
@@ -654,11 +621,11 @@ The shared codec processes segmented inputs in one CRC/COBS pass. the Rust bridg
 Receiving streams DVZip into bounded CPIO extraction; sending streams CPIO into gzip/DVZip
 temporary archives. Success requires boundary validation and final receiver confirmation.
 
-```powershell
-cargo run --release -p omdrop-proto --example codec_bench
-cargo run --release -p omdrop-core --example archive_bench
+```sh
+cargo run --release -p wayline-proto --example codec_bench
+cargo run --release -p wayline-core --example archive_bench
 cargo test --manifest-path vendor/owly-airdrop/Cargo.toml --all-features --lib --test vectors --locked
-cargo test -p omdrop-core --locked
+cargo test -p wayline-core --locked
 ```
 
 Host benchmarks measure codec CPU cost. Measure wireless throughput on hardware with a fixed

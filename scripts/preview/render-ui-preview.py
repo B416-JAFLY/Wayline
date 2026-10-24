@@ -2,8 +2,8 @@
 """Package ui_preview's actual RGB565 frames as PNG/GIF. Requires Pillow; no font download.
 
 cargo run --manifest-path firmware/Cargo.toml --features cardputer-ui --example ui_preview -- build/cardputer-ui
-python scripts/render-ui-preview.py
-python scripts/render-ui-preview.py --readme
+python scripts/preview/render-ui-preview.py
+python scripts/preview/render-ui-preview.py --readme
 """
 import argparse
 import csv
@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
-root = Path(__file__).resolve().parents[1]
+root = Path(__file__).resolve().parents[2]
 frames = root / "build/cardputer-ui"
 font = ImageFont.load_default(size=16)
 parser = argparse.ArgumentParser(description=__doc__)
@@ -20,7 +20,7 @@ args = parser.parse_args()
 def contact_sheet(pages, filename):
     sheet = Image.new("RGB", (1536, 100 + 302 * len(pages)), "#090e18")
     draw = ImageDraw.Draw(sheet)
-    draw.text((24, 18), "OMDROP / CARDPUTER ADV  -  EXACT FIRMWARE RENDERER", font=font, fill="#dce8f8")
+    draw.text((24, 18), "WAYLINE / CARDPUTER ADV  -  EXACT FIRMWARE RENDERER", font=font, fill="#dce8f8")
     for column, (locale, label) in enumerate([
         ("zh-CN", "SIMPLIFIED CHINESE"), ("zh-TW", "TRADITIONAL CHINESE"), ("en", "ENGLISH")
     ]):

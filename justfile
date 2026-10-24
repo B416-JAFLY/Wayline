@@ -1,50 +1,47 @@
-# Development tasks. `just` lists them. Firmware recipes need ESP-IDF's
-# environment (export.ps1) in the shell.
-set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
-
-port := "COM4"
+# Development tasks. `just` lists them. Firmware flashing uses an activated
+# ESP-IDF environment and an explicitly supplied serial port.
 
 [private]
 default:
     @just --list
 
-# Build the Rust Cardputer Adv firmware in firmware/build-rust
-build-firmware:
-    powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-firmware.ps1
-
-# Flash owl-radio over {{port}}
-flash: build-firmware
-    cd firmware; idf.py -B build-rust -D "SDKCONFIG=build-rust/sdkconfig" -p {{port}} flash
-
-# Build owl-radio for the Cardputer Adv's native USB Serial/JTAG port
-build-cardputer: build-firmware
-
-# Flash owl-radio to the Cardputer Adv (replaces its current firmware)
-flash-cardputer: flash
-
-# Build the default Rust AWDL bridge with verified Wintun
+# Build the host crates, including the bridge on Windows.
 build-bridge:
-    ./scripts/build-bridge.ps1
+    cargo run --locked -p wayline-tools -- host-build
 
-# Test the Rust bridge and pinned AWDL core without hardware
+# Test the Rust bridge and pinned AWDL core without hardware.
 test-bridge:
-    ./scripts/build-bridge.ps1 -Test
+    cargo test --locked -p wayline-awdl -p wayline-bridge --all-targets
+    cargo test --locked --manifest-path vendor/owly-awdl/Cargo.toml --all-features
 
-# Probe the radio protocol (hello, capture, ack-test, link)
-spike TEST *ARGS:
-    python tests/radio_probe.py -p {{port}} {{TEST}} {{ARGS}}
+# Probe the radio protocol using the Rust serial client.
+radio RADIO_PORT COMMAND *ARGS:
+    cargo run --locked -p wayline-radio -- {{RADIO_PORT}} {{COMMAND}} {{ARGS}}
 
 # Run the Rust workspace tests on the host
 rust-test:
     cargo test --manifest-path Cargo.toml
 
+# Build the host crates available on this operating system.
+host-build:
+    cargo run --locked -p wayline-tools -- host-build
+
+# Build and test the host crates available on this operating system.
+host-test:
+    cargo run --locked -p wayline-tools -- host-build --test
+
+# Build an ESP-IDF firmware profile through the Rust tool wrapper.
+firmware-build TARGET OUTPUT *ARGS:
+    cargo run --locked -p wayline-tools -- firmware-build --target {{TARGET}} --output {{OUTPUT}} {{ARGS}}
+
 # Check the no_std protocol crate and the firmware C ABI shim on the host
 rust-check:
-    cargo check --manifest-path crates/omdrop-proto/Cargo.toml --no-default-features
+    cargo check --manifest-path crates/wayline-proto/Cargo.toml --no-default-features
     cargo check --manifest-path firmware/Cargo.toml
 
-# Build the Rust Cardputer firmware with ESP-IDF drivers
-rust-firmware-build: build-firmware
+# Build the default Rust Cardputer firmware with ESP-IDF drivers
+rust-firmware-build:
+    cargo run --locked -p wayline-tools -- firmware-build --target esp32s3 --output firmware/build-rust --sdkconfig-defaults "sdkconfig.defaults;sdkconfig.defaults.cardputer"
 
 # Test firmware policy without hardware
 rust-firmware-test:
@@ -58,24 +55,24 @@ rust-fmt:
 
 # Run the Rust receiver core against a local IPv6 endpoint
 rust-receive *ARGS:
-    cargo run --manifest-path Cargo.toml -p omdrop-cli -- receive {{ARGS}}
+    cargo run --manifest-path Cargo.toml -p wayline-cli -- receive {{ARGS}}
 
 # Run the Rust radio supervisor in a foreground console on Windows
 rust-service *ARGS:
-    cargo run --manifest-path Cargo.toml -p omdrop-service -- {{ARGS}}
+    cargo run --manifest-path Cargo.toml -p wayline-service -- {{ARGS}}
 
 # Build the Rust Windows service (installation is a separate explicit step)
 rust-service-build:
-    cargo build --manifest-path Cargo.toml -p omdrop-service --release
+    cargo build --manifest-path Cargo.toml -p wayline-service --release
 
-# Build the native floating capsule (locates the Windows SDK shader compiler)
+# Build the native floating capsule.
 rust-desktop-build:
-    powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps1
+    cargo build --locked -p wayline-desktop --release
 
 # Run the native capsule for development
 rust-desktop:
-    cargo run --manifest-path Cargo.toml -p omdrop-desktop
+    cargo run --manifest-path Cargo.toml -p wayline-desktop
 
 # Real process/event/pipe tests with a fake OWL, without opening the radio
 rust-service-test:
-    cargo test --manifest-path Cargo.toml -p omdrop-service --all-targets
+    cargo test --manifest-path Cargo.toml -p wayline-service --all-targets

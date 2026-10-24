@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compose either direction of the README AirDrop / ESP32 / Omdrop walkthrough.
+"""Compose either direction of the README AirDrop / ESP32 / Wayline walkthrough.
 
 The phone and desktop panels are illustrative. The board panel is the actual
 firmware renderer. This script does not start services, open ports or send files.
@@ -14,9 +14,9 @@ from pathlib import Path
 
 from PIL import Image, ImageColor, ImageDraw, ImageFont
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 WORK = ROOT / "build/cardputer-ui/airdrop-flow"
-OUTPUT = ROOT / "docs/assets/airdrop-esp32-omdrop.gif"
+OUTPUT = ROOT / "docs/assets/airdrop-esp32-wayline.gif"
 WIDTH, HEIGHT, SCALE = 1280, 720, 2
 BG, CARD, WHITE, MUTED, BLUE = "#0b1018", "#1c1c1f", "#f5f5f7", "#a0a0a8", "#0a84ff"
 STATES = ["photos", "photo", "share", "discover", "offer", "transfer", "confirm", "complete"]
@@ -26,11 +26,11 @@ CAPTIONS = {
     "photos": "打开 iPhone「照片」，轻点要分享的照片",
     "photo": "轻点左下角的分享按钮，打开 iOS 分享面板",
     "share": "在系统分享面板中轻点「隔空投送」",
-    "discover": "在 iPhone 的 AirDrop 列表中选择 Omdrop PC",
-    "offer": "请求经 ESP32 到达电脑，在 Omdrop 点击「接受」",
-    "transfer": "文件通过 AWDL → ESP32 → USB 送入 Omdrop",
+    "discover": "在 iPhone 的 AirDrop 列表中选择 Wayline PC",
+    "offer": "请求经 ESP32 到达电脑，在 Wayline 点击「接受」",
+    "transfer": "文件通过 AWDL → ESP32 → USB 送入 Wayline",
     "confirm": "进度已到 100%，继续等待文件校验和协议确认",
-    "complete": "文件保存到「下载 / Omdrop」，发送端与板端显示完成",
+    "complete": "文件保存到「下载 / Wayline」，发送端与板端显示完成",
 }
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--font", type=Path, help="CJK TrueType/OpenType font")
@@ -41,18 +41,18 @@ PC_TO_IPHONE = args.direction == "pc-to-iphone"
 DESKTOP_X, BOARD_X = (24, 460) if PC_TO_IPHONE else (876, 320)
 if PC_TO_IPHONE:
     WORK = ROOT / "build/cardputer-ui/pc-airdrop-flow"
-    OUTPUT = ROOT / "docs/assets/omdrop-esp32-airdrop.gif"
+    OUTPUT = ROOT / "docs/assets/wayline-esp32-airdrop.gif"
     PHONE_X = 1030
     STATES = ["home", "picker", "discover", "prepare", "offer", "transfer", "confirm", "complete"]
     CAPTIONS = {
-        "home": "在 Omdrop 点击「选择文件」；iPhone 保持唤醒并开启隔空投送接收",
+        "home": "在 Wayline 点击「选择文件」；iPhone 保持唤醒并开启隔空投送接收",
         "picker": "在 Windows 文件选择器中选中照片，点击「打开」",
         "discover": "在附近设备中选中 iPhone，然后点击「发送」",
-        "prepare": "Omdrop 正在整理文件，并通过 ESP32 联系接收设备",
+        "prepare": "Wayline 正在整理文件，并通过 ESP32 联系接收设备",
         "offer": "iPhone 显示隔空投送请求，轻点「接受」后开始传输",
-        "transfer": "照片从 Omdrop 经 USB → ESP32 → AWDL 发送到 iPhone",
-        "confirm": "上传已到 100%，Omdrop 继续等待 iPhone 的接收确认",
-        "complete": "iPhone 查看收到的照片，Omdrop 与 ESP32 显示发送完成",
+        "transfer": "照片从 Wayline 经 USB → ESP32 → AWDL 发送到 iPhone",
+        "confirm": "上传已到 100%，Wayline 继续等待 iPhone 的接收确认",
+        "complete": "iPhone 查看收到的照片，Wayline 与 ESP32 显示发送完成",
     }
 candidates = [args.font, Path("C:/Windows/Fonts/msyh.ttc"),
               Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
@@ -281,7 +281,7 @@ def phone_content(state):
                 rounded(draw, (45, 280, 75, 298), 1, "#d5e5ed")
                 polygon(draw, [(43, 301), (39, 306), (81, 306), (77, 301)], "#949da9")
                 line(draw, [(55, 303), (65, 303)], "#dce0e5", 1)
-                text(draw, (60, 329), "Omdrop PC", 10, "#1b1b20", "mt")
+                text(draw, (60, 329), "Wayline PC", 10, "#1b1b20", "mt")
                 status = {"discover": "", "offer": "等待中…", "transfer": "正在发送…",
                           "confirm": "正在发送…", "complete": "已发送"}[state]
                 text(draw, (60, 347), status, 9, BLUE, "mt")
@@ -323,11 +323,11 @@ def receiving_phone_content(state):
             rounded(draw, (14, 112, 204, 354), 14, "#f6f6f9")
             text(draw, (109, 131), "隔空投送", 16, "#17171b", "mt")
             if state == "offer":
-                text(draw, (109, 160), "“Omdrop PC”想要共享", 10, "#242428", "mt")
+                text(draw, (109, 160), "“Wayline PC”想要共享", 10, "#242428", "mt")
                 text(draw, (109, 179), "一张照片。", 10, "#242428", "mt")
             else:
                 text(draw, (109, 160), "正在接收来自", 10, "#242428", "mt")
-                text(draw, (109, 179), "Omdrop PC 的照片", 10, "#242428", "mt")
+                text(draw, (109, 179), "Wayline PC 的照片", 10, "#242428", "mt")
             # The sender's Ask payload has file metadata but no thumbnail.
             rounded(draw, (90, 211, 128, 259), 4, "#ffffff", "#d1d1db", .8)
             polygon(draw, [(117, 211), (128, 222), (117, 222)], "#d9eaff")
@@ -500,7 +500,7 @@ def sending_desktop_overlay(image, state, elapsed):
 def base(state):
     image = Image.new("RGBA", (WIDTH*SCALE, HEIGHT*SCALE), BG)
     draw = ImageDraw.Draw(image)
-    title = "Omdrop → ESP32 → AirDrop" if PC_TO_IPHONE else "AirDrop → ESP32 → Omdrop"
+    title = "Wayline → ESP32 → AirDrop" if PC_TO_IPHONE else "AirDrop → ESP32 → Wayline"
     subtitle = ("从 Windows 到 iPhone，在手机确认接收后传输照片" if PC_TO_IPHONE
                 else "从 iPhone 到 Windows，文件经无线桥接后保存到电脑")
     text(draw, (24, 24), title, 30)
@@ -516,7 +516,7 @@ def base(state):
         text(draw, (x+16, 114), f"{index+1:02}  {label}", 14,
              "#75c9ff" if index == active else "#8d9eb4")
     for x, label in [(PHONE_X-8, "AirDrop · iPhone"), (BOARD_X, "ESP32 · Cardputer Adv"),
-                     (DESKTOP_X, "Omdrop · Windows")]:
+                     (DESKTOP_X, "Wayline · Windows")]:
         text(draw, (x, 158), label, 17)
 
     rounded(draw, (PHONE_X-8, 190, PHONE_X+PHONE_W+8, 666), 32, "#202936", "#586477")
@@ -534,7 +534,7 @@ def base(state):
     x, y = DESKTOP_X, 190
     rounded(draw, (x, y, x+356, y+476), 28, CARD, "#414146")
     mark(image, x+22, y+23, 25)
-    text(draw, (x+56, y+28), "Omdrop", 17)
+    text(draw, (x+56, y+28), "Wayline", 17)
     circle(draw, x+279, y+37, 14, "#27272b")
     gear(draw, x+279, y+37)
     circle(draw, x+315, y+37, 14, "#27272b")
@@ -545,7 +545,7 @@ def base(state):
         text(draw, (x+22, y+111), "接收文件", 24)
         text(draw, (x+22, y+158), "iPhone 想向你发送 1 个文件", 13)
         text(draw, (x+22, y+192), "IMG_4821.jpg", 12, MUTED)
-        text(draw, (x+22, y+227), "接受后保存到「下载 / Omdrop」", 10, MUTED)
+        text(draw, (x+22, y+227), "接受后保存到「下载 / Wayline」", 10, MUTED)
         button(draw, x+22, y+253, "接受")
         button(draw, x+22, y+311, "拒绝", False)
     else:
@@ -557,7 +557,7 @@ def base(state):
             text(draw, (x+22, y+420), "正在接收来自 iPhone 的文件…", 10, MUTED)
         elif state == "complete":
             text(draw, (x+22, y+414), "已接收来自 iPhone 的 1 个文件，", 10, MUTED)
-            text(draw, (x+22, y+430), "已保存到下载文件夹中的 Omdrop", 10, MUTED)
+            text(draw, (x+22, y+430), "已保存到下载文件夹中的 Wayline", 10, MUTED)
     circle(draw, x+25, y+454, 2.5, "#30d158")
     text(draw, (x+34, y+449), "已连接", 10, MUTED)
     text(draw, (x+334, y+449), "Ctrl+O  选择文件", 10, MUTED, "rt")

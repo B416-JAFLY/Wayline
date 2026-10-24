@@ -2,7 +2,7 @@
 //! to receiver over TLS on the veth harness. Each test runs in a network namespace of its own.
 
 // This harness creates Linux veth interfaces with unshare/ip and uses SO_REUSEPORT.
-// Windows TLS and transfer lifecycle coverage lives in omdrop-core/tests/airdrop_migration.rs.
+// Windows TLS and transfer lifecycle coverage lives in wayline-core/tests/airdrop_migration.rs.
 #![cfg(target_os = "linux")]
 
 mod harness;

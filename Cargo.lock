@@ -5906,6 +5906,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "wayline-tools"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "sha2 0.10.9",
+ "wayline-flash",
+ "windows-service",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "wayline-transport"
 version = "0.1.0"
 dependencies = [

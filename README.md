@@ -1,11 +1,10 @@
-# omdrop-windows
+# Wayline
 
 AirDrop between Windows and Apple devices through a USB-attached ESP32. The desktop app,
 service, AirDrop core and firmware use Rust. AWDL and AirDrop use the pinned Owly crates.
 
-The default Rust AWDL backend based on Owly 0.4.0 can be built separately with
-`scripts/build-bridge.ps1 -Test`. It uses the existing ESP32 firmware protocol and
-Wintun and awaits device interoperability testing.
+The default Rust AWDL backend based on Owly 0.4.0 is included in the Windows host build.
+It uses the existing ESP32 firmware protocol and Wintun and awaits device interoperability testing.
 See the [development guide](docs/DEVELOPMENT.md#rust-awdl-backend).
 
 Supports Windows 10/11 x64 and M5Stack Cardputer Adv (ESP32-S3, native USB Serial/JTAG,
@@ -50,26 +49,26 @@ Status, sharing guide, preferences, sound settings and three-language switching.
 
 ### Apple → Windows
 
-![AirDrop through ESP32 to Omdrop](docs/assets/airdrop-esp32-omdrop.gif)
+![AirDrop through ESP32 to Wayline](docs/assets/airdrop-esp32-wayline.gif)
 
 ### Windows → Apple
 
-![Omdrop through ESP32 to iPhone](docs/assets/omdrop-esp32-airdrop.gif)
+![Wayline through ESP32 to iPhone](docs/assets/wayline-esp32-airdrop.gif)
 
 ## Install and use
 
-1. Extract the complete Windows x64 offline package, run `install.cmd`, and allow service installation.
+1. Extract the Windows x64 artifacts and start the desktop/service binaries manually; the Rust installer migration is in progress.
 2. Connect Cardputer Adv with a data cable. Click the Device firmware icon at the top of the sharing card, select its port and board,
    then install or update the firmware.
 3. Enable Bluetooth on the PC. Enable Wi-Fi and Bluetooth on iPhone and set
    AirDrop to Everyone for 10 Minutes.
-4. Drop files into Omdrop and select a recipient. Accept incoming transfers in Omdrop.
+4. Drop files into Wayline and select a recipient. Accept incoming transfers in Wayline.
 
 The package includes firmware, flashing tools and runtime libraries; no development tools
 or runtime downloads are needed. Run desktop without elevation so Explorer drag-and-drop works.
-Before updating, finish transfers, quit Omdrop from the tray, and close CLI commands.
+Before updating, finish transfers, quit Wayline from the tray, and close CLI commands.
 
-- Received files default to Downloads/Omdrop; change the folder in Settings. Desktop and CLI
+- Received files default to Downloads/Wayline; change the folder in Settings. Desktop and CLI
   share the device name, identity and save directory.
 - Receive results can appear in a separate, dismissible desktop notification window. Settings lets
   you enable or disable it, choose among six screen positions, and set a 3–30 second dismissal delay.
@@ -96,23 +95,22 @@ Before updating, finish transfers, quit Omdrop from the tray, and close CLI comm
   tasks; the service stays active while another CLI session uses it.
 
 First installation replaces the board's program and partition layout. Preserving settings
-requires recognizable Omdrop firmware and an identical layout. See the
+requires recognizable Wayline firmware and an identical layout. See the
 [quick start](docs/QUICKSTART.md) for board controls and troubleshooting.
 CLI arguments, JSON output and exit codes are in the
 [development guide](docs/DEVELOPMENT.md#cli-and-radio-diagnostics).
 
 ## Build from source
 
-Prepare the [development environment](docs/DEVELOPMENT.md#build-and-test), then run PowerShell
-from the repository root:
+Prepare the [development environment](docs/DEVELOPMENT.md#build-and-test), then run from the
+repository root:
 
-```powershell
-scripts/build-release.ps1
+```sh
+cargo run --locked -p wayline-tools -- host-build --release
 ```
 
-Outputs, including `omdrop-bridge.exe` and verified Wintun, are in `target/release`. For developer installation, run
-`scripts/install-service.ps1` in an administrator terminal. Firmware builds, including the
-headless ESP32-S3 and ESP32-C5 builds, tests and offline packaging are covered in the
+This builds the portable host crates. The Windows-only offline package, verified Wintun,
+firmware bundle and service installation remain documented separately in the
 [development guide](docs/DEVELOPMENT.md).
 
 ## Source layout
@@ -120,13 +118,14 @@ headless ESP32-S3 and ESP32-C5 builds, tests and offline packaging are covered i
 | Path | Purpose |
 | --- | --- |
 | `apps/desktop`, `apps/cli` | GPUI desktop and CLI entry points |
-| `apps/bridge`, `crates/omdrop-awdl` | Rust AWDL child, ESP32 serial and Wintun integration |
+| `apps/bridge`, `crates/wayline-awdl` | Rust AWDL child, ESP32 serial and Wintun integration |
 | `vendor/owly-awdl`, `vendor/owly-airdrop` | Pinned AWDL and AirDrop protocol implementations |
-| `crates/omdrop-service` | Service, radio lifecycle, sessions and maintenance |
-| `crates/omdrop-core`, `crates/omdrop-host`, `crates/omdrop-flash` | Transfers, shared preferences and firmware operations |
-| `crates/omdrop-proto`, `crates/omdrop-board`, `crates/omdrop-radio`, `crates/omdrop-transport` | Shared protocol, board feedback and transport adapters |
+| `crates/wayline-service` | Service, radio lifecycle, sessions and maintenance |
+| `crates/wayline-core`, `crates/wayline-host`, `crates/wayline-flash` | Transfers, shared preferences and firmware operations |
+| `crates/wayline-tools` | Cross-platform Cargo build and test orchestration |
+| `crates/wayline-proto`, `crates/wayline-board`, `crates/wayline-radio`, `crates/wayline-transport` | Shared protocol, board feedback and transport adapters |
 | `firmware` | Independent Rust/ESP-IDF project; hardware interfaces in `firmware/components/radio` |
-| `scripts`, `tests`, `assets/branding` | Builds, diagnostics and [branding assets](assets/branding/README.md) |
+| `scripts`, `assets/branding` | Categorized [asset generators and preview scripts](scripts/README.md), and [branding assets](assets/branding/README.md) |
 
 ## Credits
 
@@ -134,7 +133,7 @@ Thanks to the authors, maintainers and contributors of:
 
 - [omdrop-owl-windows](https://github.com/dantdmdarealguy/omdrop-owl-windows) (dantdmdarealguy):
   implementation foundation for the Windows OWL port, Wintun integration and ESP32 radio bridge.
-- [omdrop-owl](https://github.com/t4t5/omdrop-owl) (t4t5): Linux radio backend and fixed-channel approach.
+- [owly](https://github.com/t4t5/owly) (t4t5): Linux radio backend and fixed-channel approach.
 - [omdrop](https://github.com/netmojo-systems/omdrop-plugin),
   [omdrop-awdl](https://github.com/netmojo-systems/omdrop-awdl) (Brent Kearney and contributors)
   and [OpenDrop](https://github.com/seemoo-lab/opendrop) (SEEMOO): AirDrop protocol and transfer references.

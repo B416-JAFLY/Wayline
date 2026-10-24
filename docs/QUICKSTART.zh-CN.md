@@ -1,4 +1,4 @@
-# Omdrop 快速开始
+# Wayline 快速开始
 
 [English](QUICKSTART.md)
 
@@ -6,15 +6,15 @@
 
 ## 安装与更新
 
-解压完整离线包，双击 `install.cmd`，按提示允许安装后台服务。安装完成后以普通用户身份打开桌面，确保资源管理器拖放可用。固件、烧录工具和运行库已包含在包内，无需开发环境或联网下载。
+解压 Windows 构建产物，迁移期间手动启动桌面或服务程序。自动离线安装器正在迁移到 Rust。
 
-更新前完成传输，从托盘退出 Omdrop，并结束 CLI 命令。安装器校验全部文件后替换程序，旧程序保留为备份；接收文件、名称和身份配置不受影响。
+更新前完成传输，从托盘退出 Wayline，并结束 CLI 命令。安装器校验全部文件后替换程序，旧程序保留为备份；接收文件、名称和身份配置不受影响。
 
 ## 初始化开发板
 
 1. 用数据线连接设备，点击分享卡片顶部的“设备固件”。
 2. 选择对应串口和固件 profile：Cardputer Adv、ESP32-S3 Headless UART0 / Native USB，或 ESP32-C5 UART0 / Native USB。UART0 与 Native USB 必须匹配实际接入电脑的 USB 接口类型。S3 Headless profile 固定适用于 8 MiB Flash。
-3. 首次使用选“首次 / 重新安装”，会替换程序和分区布局，不保证保留其他固件的数据。已有 Omdrop 选“保留设置更新”，要求原固件可识别且分区布局一致。
+3. 首次使用选“首次 / 重新安装”，会替换程序和分区布局，不保证保留其他固件的数据。已有 Wayline 选“保留设置更新”，要求原固件可识别且分区布局一致。
 4. 点击“开始安装”或“开始更新”，等待写入、校验和启动检查完成，显示“设备已就绪”。
 
 安装期间保持连接。关闭卡片只隐藏界面，托盘退出会询问是否取消；写入开始后的取消或断电可能需要完整重刷，不支持自动回滚。
@@ -23,14 +23,14 @@
 
 电脑打开蓝牙；iPhone 打开 Wi-Fi 和蓝牙，将 AirDrop 设为“所有人（10 分钟）”。电脑内置 Wi-Fi 无需开启，也无需连接同一个路由器。
 
-- 发送：拖入文件，或用托盘、`Ctrl+O`、文件右键“通过 Omdrop 发送”选取文件，再选择接收设备。上传到 100% 后等待“已送达”。
-- 接收：在 Apple 设备的 AirDrop 列表选择这台电脑，再在 Omdrop 中接受。
-- 设置：可修改设备名称、接收目录和界面语言；语言使用下拉框选择，支持简体中文、繁體中文、English、日本語、한국어、Français、Deutsch 和 Español。名称与目录桌面和 CLI 共用。默认保存到下载目录的 `Omdrop` 文件夹；更改目录不移动已有文件，接收期间不可更改。语言选择保存在本机并立即生效。
+- 发送：拖入文件，或用托盘、`Ctrl+O`、文件右键“通过 Wayline 发送”选取文件，再选择接收设备。上传到 100% 后等待“已送达”。
+- 接收：在 Apple 设备的 AirDrop 列表选择这台电脑，再在 Wayline 中接受。
+- 设置：可修改设备名称、接收目录和界面语言；语言使用下拉框选择，支持简体中文、繁體中文、English、日本語、한국어、Français、Deutsch 和 Español。名称与目录桌面和 CLI 共用。默认保存到下载目录的 `Wayline` 文件夹；更改目录不移动已有文件，接收期间不可更改。语言选择保存在本机并立即生效。
 - 错误详情：鼠标悬停提示可展开全文，点击“复制”获取完整诊断。
 
-× 或 Esc 隐藏卡片，接收继续运行。托盘“退出 Omdrop”或 `Ctrl+Q` 结束本客户端任务；默认按需服务在最后一个客户端退出后回收无线设备，独立服务部署可以常驻。
+× 或 Esc 隐藏卡片，接收继续运行。托盘“退出 Wayline”或 `Ctrl+Q` 结束本客户端任务；默认按需服务在最后一个客户端退出后回收无线设备，独立服务部署可以常驻。
 
-首次启动会注册文件右键菜单和“发送到 → Omdrop AirDrop”。Windows 11 中通常位于“显示更多选项”。退出后运行 `omdrop-desktop.exe --unregister-shell` 可移除入口。
+首次启动会注册文件右键菜单和“发送到 → Wayline AirDrop”。Windows 11 中通常位于“显示更多选项”。退出后运行 `wayline-desktop.exe --unregister-shell` 可移除入口。
 
 ## 板载界面
 
@@ -56,14 +56,14 @@
 
 ## 可选命令行工具
 
-CLI 工具包解压后可直接在 PowerShell 中运行；无线收发需要已安装的桌面或独立后台服务包。独立服务包也使用 `install.cmd` 安装，常驻且不打开界面。
+CLI 工具包解压后可直接在终端中运行；无线收发需要已启动的桌面或独立后台服务。
 
-```powershell
-./omdrop-cli.exe --help
-./omdrop-cli.exe status --json
-./omdrop-cli.exe discover
-./omdrop-cli.exe send --to "iPhone" -- "C:\Users\Example\Pictures\photo.jpg"
-./omdrop-cli.exe receive
+```sh
+./wayline-cli.exe --help
+./wayline-cli.exe status --json
+./wayline-cli.exe discover
+./wayline-cli.exe send --to "iPhone" -- "C:\Users\Example\Pictures\photo.jpg"
+./wayline-cli.exe receive
 ```
 
 接收默认逐次询问，无人值守接收需明确添加 `--accept-all`。Ctrl+C 结束命令并释放自己的会话。完整参数、JSON 输出与退出码见[开发指南](DEVELOPMENT.zh-CN.md#cli-与串口诊断)。

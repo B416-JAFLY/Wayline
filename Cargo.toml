@@ -13,6 +13,7 @@ members = [
     "crates/wayline-radio",
     "crates/wayline-service",
     "crates/wayline-transport",
+    "crates/wayline-tools",
 ]
 # ESP32 uses the Xtensa toolchain and its own lockfile/release profile.
 # Third-party compatibility patches are not workspace members.

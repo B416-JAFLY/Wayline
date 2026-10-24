@@ -1,27 +1,14 @@
 #!/usr/bin/env node
 // Regenerate the desktop icon assets from the approved SVG geometry.
-// Requires sharp (resolve normally, via OMDROP_SHARP_MODULE, or from Codex's
-// bundled runtime). Run from any directory: node scripts/generate-desktop-icons.cjs
+// Requires sharp installed for Node, or WAYLINE_SHARP_MODULE pointing to it.
+// Run from any directory: node scripts/assets/generate-desktop-icons.cjs
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const os = require('node:os');
 const assert = require('node:assert/strict');
-
-function loadSharp() {
-  if (process.env.OMDROP_SHARP_MODULE) return require(process.env.OMDROP_SHARP_MODULE);
-  try {
-    return require('sharp');
-  } catch (error) {
-    if (error.code !== 'MODULE_NOT_FOUND') throw error;
-    return require(path.join(os.homedir(), '.cache', 'codex-runtimes',
-      'codex-primary-runtime', 'dependencies', 'node', 'node_modules', 'sharp'));
-  }
-}
-
-const sharp = loadSharp();
-const root = path.resolve(__dirname, '..');
+const sharp = require('../lib/load-sharp.cjs');
+const root = path.resolve(__dirname, '../..');
 const assets = path.join(root, 'apps', 'desktop', 'assets');
-const sourcePath = path.join(root, 'assets', 'branding', 'omdrop-mark.svg');
+const sourcePath = path.join(root, 'assets', 'branding', 'wayline-mark.svg');
 const previewPath = path.join(root, 'build', 'desktop-icons-preview.png');
 const appSizes = [16, 20, 24, 32, 40, 48, 64, 128, 256];
 const traySizes = [16, 20, 24, 32, 40, 48, 64];
@@ -132,7 +119,7 @@ async function preview(connected, disconnected) {
   }
   const background = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
     <rect width="${width}" height="${height}" fill="#E9ECF0"/>
-    <g font-family="Segoe UI, Arial, sans-serif"><text x="32" y="35" font-size="22" fill="#242426">Omdrop desktop icons</text>
+    <g font-family="Segoe UI, Arial, sans-serif"><text x="32" y="35" font-size="22" fill="#242426">Wayline desktop icons</text>
     <text x="32" y="56" font-size="13" fill="#596170">Actual size above; nearest-neighbor enlargement below. Transparent artwork on light and dark backgrounds.</text>
     ${labels.join('\n')}</g></svg>`;
   await sharp(Buffer.from(background)).composite(layers).png().toFile(previewPath);

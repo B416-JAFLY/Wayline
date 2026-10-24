@@ -25,34 +25,34 @@ consult the [development guide](docs/DEVELOPMENT.md) for implementation details.
 | --- | --- |
 | `apps/desktop` | GPUI desktop, tray, Explorer integration, transfer UI and service lifecycle |
 | `apps/cli` | AirDrop command-line entry point |
-| `crates/omdrop-service` | Windows service, the Rust bridge child processes, configuration, named pipes and firewall |
-| `crates/omdrop-core` | Discovery, BLE wake-up, TLS, sending and receiving |
+| `crates/wayline-service` | Windows service, the Rust bridge child processes, configuration, named pipes and firewall |
+| `crates/wayline-core` | Discovery, BLE wake-up, TLS, sending and receiving |
 | `vendor/owly-airdrop` | Pinned AirDrop state machines, HTTP/plist/mDNS and archive codecs |
 | `vendor/owly-awdl` | Pinned AWDL state machine and host driver |
-| `crates/omdrop-proto` | Shared host/firmware CRC/COBS protocol and C protocol header |
-| `crates/omdrop-board` | Transfer status feedback to the board |
-| `crates/omdrop-radio`, `crates/omdrop-transport` | Serial diagnostics and transport adapters |
+| `crates/wayline-proto` | Shared host/firmware CRC/COBS protocol and C protocol header |
+| `crates/wayline-board` | Transfer status feedback to the board |
+| `crates/wayline-radio`, `crates/wayline-transport` | Serial diagnostics and transport adapters |
 | `firmware` | Independent Cargo/ESP-IDF project: ESP32 application, UI, audio and assets |
 | `firmware/components/radio` | C/C++ hardware interfaces for ESP-IDF/M5Unified |
-| `apps/bridge`, `crates/omdrop-awdl` | Rust bridge process, ESP32 serial, Wintun and board feedback |
-| `scripts`, `tests` | Build/install scripts and Python diagnostics |
+| `apps/bridge`, `crates/wayline-awdl` | Rust bridge process, ESP32 serial, Wintun and board feedback |
+| `scripts/assets`, `scripts/preview`, `scripts/lib` | Resource generators, UI/transfer previews and shared script helpers |
 
 The root Cargo workspace contains Windows applications and shared libraries. `firmware` has
 its own `Cargo.toml`, `Cargo.lock` and Xtensa build configuration; build and validate it separately.
 
 ## Implementation Constraints
 
-- The desktop UI and privileged service share `omdrop-desktop.exe`, running as a normal user
+- The desktop UI and privileged service share `wayline-desktop.exe`, running as a normal user
   process and a separate `--service` process. Dispatch service mode before initializing GPUI,
   single-instance handling or Explorer registration.
 - Keep the UI unelevated so Explorer drag-and-drop works. The service manages the Rust bridge; only one
   process may own the radio's serial port at a time.
 - Closing the sharing card only hides it. Tray Quit must cancel sending, stop receiving and
   wait for the service to reclaim the Rust bridge. Preserve error reporting and retry support when shutdown fails.
-- `omdrop-service` provides both the library linked into desktop and a standalone service entry
+- `wayline-service` provides both the library linked into desktop and a standalone service entry
   point. Account for both modes when modifying it.
-- Keep `omdrop-proto` usable with `no_std` and the Rust firmware application allocation-free.
-  For shared protocol changes, check the Rust definitions, `crates/omdrop-proto/include/proto.h`,
+- Keep `wayline-proto` usable with `no_std` and the Rust firmware application allocation-free.
+  For shared protocol changes, check the Rust definitions, `crates/wayline-proto/include/proto.h`,
   the Rust bridge and firmware together. Verify message lengths, CRC, COBS and boundary handling.
 - For FFI changes, check `repr(C)`, field layout, buffer lengths, pointer lifetimes and thread
   access constraints. Keep hardware calls in the C/C++ interface layer. Never make blocking
@@ -75,8 +75,9 @@ comments or low-impact mechanical changes. For documentation-only edits, check l
 and command syntax.
 
 Windows development requires Rust MSVC, Visual Studio C++ Build Tools and the Windows SDK
-(including `fxc.exe`). Build desktop with `scripts/build-desktop.ps1`, which locates the SDK
-shader compiler. Add `-DebugBuild` for a debug build.
+(including `fxc.exe`). Build desktop with `cargo run --locked -p wayline-tools -- desktop-build`;
+add `--release` for a release build. Set `GPUI_FXC_PATH` when the SDK shader compiler is not
+on the toolchain path.
 
 General Windows workspace checks:
 
@@ -90,27 +91,27 @@ For protocol or firmware changes, run the relevant checks below. Changes to the 
 implementation or hardware interfaces also require an actual ESP-IDF firmware build:
 
 ```powershell
-cargo check -p omdrop-proto --no-default-features --locked
+cargo check -p wayline-proto --no-default-features --locked
 cargo fmt --manifest-path firmware/Cargo.toml -- --check
 cargo test --manifest-path firmware/Cargo.toml --all-features --locked
 cargo clippy --manifest-path firmware/Cargo.toml --all-targets --all-features --locked -- -D warnings
-scripts/build-firmware.ps1
+cargo run --locked -p wayline-tools -- firmware-build --target esp32s3 --output firmware/build-rust --sdkconfig-defaults "sdkconfig.defaults;sdkconfig.defaults.cardputer"
 ```
 
-Firmware builds require ESP-IDF 6.0 and the ESP32-S3 toolchain installed with `espup`. The script
-supports an activated environment, an EIM installation or `-IdfProfile <activation-script>`.
+Firmware builds require an activated ESP-IDF 6.0 environment and the ESP32-S3 toolchain
+installed with `espup`.
 Host tests of firmware logic do not replace an Xtensa build or validation on the board.
 
 For AWDL, AirDrop or USB queue changes, test the affected adapters and pinned crates:
 
 ```powershell
-scripts/build-bridge.ps1 -Test
-cargo test -p omdrop-core --all-targets --locked
+cargo run --locked -p wayline-tools -- bridge-build --test
+cargo test -p wayline-core --all-targets --locked
 cargo test --manifest-path vendor/owly-awdl/Cargo.toml --all-features --locked
 cargo test --manifest-path vendor/owly-airdrop/Cargo.toml --all-features --lib --test vectors --locked
 ```
 
-For service changes, start with `cargo test -p omdrop-service --all-targets --locked`. Regular
+For service changes, start with `cargo test -p wayline-service --all-targets --locked`. Regular
 service tests use temporary configuration, a separate pipe and a simulated the Rust bridge child process.
 Ignored tests that exercise the installed service change its running state; run them separately
 when they fall within the task's scope.
@@ -134,10 +135,10 @@ skipping assertions or disabling checks to make them pass.
   `.cache`, `firmware/managed_components` and local `build` contents are
   build output or caches and must not be committed.
 - Translation source lives in `firmware/assets/locales.json`. When changing text, use
-  `scripts/generate-ui-font.py` to regenerate the string table and font subsets together.
+  `scripts/assets/generate-ui-font.py` to regenerate the string table and font subsets together.
   Preserve `firmware/assets/font-source.txt` and `firmware/assets/OFL.txt`; generation steps
   are in the development guide.
-- For firmware UI changes, use the `ui_preview` example and `scripts/render-ui-preview.py`
+- For firmware UI changes, use the `ui_preview` example and `scripts/preview/render-ui-preview.py`
   to check layouts in all three languages, status cards and animation. Display, keyboard,
   audio and persistence across power loss require device testing; previews cannot replace it.
 - Keep PowerShell scripts compatible with Windows PowerShell 5.1, check `$LASTEXITCODE` after

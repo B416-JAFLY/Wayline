@@ -1,4 +1,4 @@
-# Omdrop quick start
+# Wayline quick start
 
 [简体中文](QUICKSTART.zh-CN.md)
 
@@ -6,12 +6,12 @@ You need Windows 10/11 x64, a PC with Bluetooth LE advertising, an M5Stack Cardp
 
 ## Install and update
 
-Extract the complete offline package, run `install.cmd`, and allow service installation.
+Extract the Windows artifacts and start the desktop or service binaries manually while the Rust installer migration is in progress.
 Desktop opens as a normal user so Explorer drag-and-drop works. Firmware, flashing tools
 and runtime libraries are bundled; no development environment or runtime downloads are needed.
 
-Before updating, finish transfers, quit Omdrop from the tray, and close CLI commands.
-The installer verifies all files before replacement and keeps the previous programs as a backup.
+Before updating, finish transfers, quit Wayline from the tray, and close CLI commands.
+Automated offline installation is temporarily unavailable during the Rust installer migration.
 Received files, device name and identity settings are preserved.
 
 ## Initialize the Board
@@ -19,7 +19,7 @@ Received files, device name and identity settings are preserved.
 1. Connect the board with a data cable and open Device firmware at the top of the sharing card.
 2. Select the serial port and matching profile: Cardputer Adv, ESP32-S3 Headless UART0 / Native USB, or ESP32-C5 UART0 / Native USB. UART0 and Native USB profiles must match the USB interface connected to the PC. S3 Headless profiles require 8 MiB flash.
 3. For first use, choose First install / Reinstall. This replaces the program and partition
-   layout and may erase data from other firmware. For Omdrop updates, choose Preserve settings;
+   layout and may erase data from other firmware. For Wayline updates, choose Preserve settings;
    this requires recognizable firmware and an identical partition layout.
 4. Start installation or update. Wait for writing, verification and the boot check to finish
    and for the device to report ready.
@@ -34,12 +34,12 @@ Enable Bluetooth on the PC. On iPhone, enable Wi-Fi and Bluetooth and set AirDro
 for 10 Minutes. The PC's built-in Wi-Fi can stay off; no shared router connection is needed.
 
 - Send: drop files, or select them from the tray, with `Ctrl+O`, or through Explorer's
-  Send with Omdrop menu. Select a recipient and wait for Delivered after uploading reaches 100%.
-- Receive: select this PC in the Apple device's AirDrop list, then accept in Omdrop.
+  Send with Wayline menu. Select a recipient and wait for Delivered after uploading reaches 100%.
+- Receive: select this PC in the Apple device's AirDrop list, then accept in Wayline.
 - Settings: change the device name, receive folder, or interface language. The language dropdown
   offers Simplified Chinese, Traditional Chinese, English, Japanese, Korean, French, German and
   Spanish. The name and folder are shared by desktop and CLI. The receive folder defaults to
-  Downloads/Omdrop; changing it leaves existing files in place and is blocked while receiving.
+  Downloads/Wayline; changing it leaves existing files in place and is blocked while receiving.
   The language choice is saved locally and applies immediately.
 - Error details: hover over a notice to expand it, then use Copy to get complete diagnostics.
 
@@ -47,9 +47,9 @@ for 10 Minutes. The PC's built-in Wi-Fi can stay off; no shared router connectio
 tasks. The default on-demand service reclaims the radio after the last client exits;
 a standalone service deployment can remain resident.
 
-First launch registers Explorer and Send to → Omdrop AirDrop entries. On Windows 11 these
+First launch registers Explorer and Send to → Wayline AirDrop entries. On Windows 11 these
 usually appear under Show more options. After quitting, run
-`omdrop-desktop.exe --unregister-shell` to remove them.
+`wayline-desktop.exe --unregister-shell` to remove them.
 
 ## Board interface
 
@@ -78,16 +78,16 @@ sleep. New transfers wake the display; active transfers suspend automatic sleep.
 
 ## Optional CLI toolkit
 
-Extract the CLI toolkit and run it from PowerShell. Wireless transfers require an installed
-desktop or standalone service package. The standalone package also installs with `install.cmd`
-and runs without a UI.
+Extract the CLI toolkit and run it from a terminal. Wireless transfers require an installed
+desktop or standalone service package. Start the standalone service binary directly while the
+installer migration is in progress.
 
-```powershell
-./omdrop-cli.exe --help
-./omdrop-cli.exe status --json
-./omdrop-cli.exe discover
-./omdrop-cli.exe send --to "iPhone" -- "C:\Users\Example\Pictures\photo.jpg"
-./omdrop-cli.exe receive
+```sh
+./wayline-cli.exe --help
+./wayline-cli.exe status --json
+./wayline-cli.exe discover
+./wayline-cli.exe send --to "iPhone" -- "C:\Users\Example\Pictures\photo.jpg"
+./wayline-cli.exe receive
 ```
 
 Receiving asks for each request by default; unattended receiving requires explicit
