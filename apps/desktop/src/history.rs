@@ -1,6 +1,6 @@
 use crate::backend::Event;
 use omdrop_host::{
-    TransferHistoryRecord, append_transfer_history, clear_transfer_history, load_transfer_history,
+    TransferHistoryRecord, append_transfer_history, delete_transfer_history, load_transfer_history,
 };
 use std::{
     path::PathBuf,
@@ -11,7 +11,8 @@ use std::{
 
 enum Command {
     Append(TransferHistoryRecord, Vec<PathBuf>),
-    Clear,
+    Delete(Vec<TransferHistoryRecord>, bool, bool),
+    SaveDeletePreference(bool),
     Flush(Sender<()>),
 }
 
@@ -28,23 +29,27 @@ impl StoreWorker {
                 for command in rx {
                     match command {
                         Command::Append(mut record, received_files) => {
-                            if !received_files.is_empty()
-                                && let Some(bytes) =
-                                    received_files.iter().try_fold(0u64, |total, path| {
-                                        total.checked_add(std::fs::metadata(path).ok()?.len())
-                                    })
-                            {
+                            if let Some(bytes) = received_file_bytes(&received_files) {
                                 record.file_bytes = Some(bytes);
                             }
                             let result = append_transfer_history(record)
                                 .map_err(|error| format!("{error:#}"));
                             let _ = events.send(Event::HistoryUpdated(result));
                         }
-                        Command::Clear => {
-                            let result = clear_transfer_history()
-                                .map(|()| Vec::new())
+                        Command::Delete(records, delete_files, remember) => {
+                            if remember {
+                                let result = omdrop_host::save_history_delete_files(delete_files)
+                                    .map_err(|error| format!("{error:#}"));
+                                let _ = events.send(Event::HistoryDeletePreferenceSaved(result));
+                            }
+                            let result = delete_transfer_history(&records, delete_files)
                                 .map_err(|error| format!("{error:#}"));
-                            let _ = events.send(Event::HistoryCleared(result));
+                            let _ = events.send(Event::HistoryDeleted(result));
+                        }
+                        Command::SaveDeletePreference(value) => {
+                            let result = omdrop_host::save_history_delete_files(value)
+                                .map_err(|error| format!("{error:#}"));
+                            let _ = events.send(Event::HistoryDeletePreferenceSaved(result));
                         }
                         Command::Flush(complete) => {
                             let _ = complete.send(());
@@ -60,8 +65,14 @@ impl StoreWorker {
         let _ = self.0.send(Command::Append(record, received_files));
     }
 
-    pub fn clear(&self) {
-        let _ = self.0.send(Command::Clear);
+    pub fn delete(&self, records: Vec<TransferHistoryRecord>, delete_files: bool, remember: bool) {
+        let _ = self
+            .0
+            .send(Command::Delete(records, delete_files, remember));
+    }
+
+    pub fn save_delete_preference(&self, value: bool) {
+        let _ = self.0.send(Command::SaveDeletePreference(value));
     }
 
     pub fn flush_handle(&self) -> JoinHandle<()> {
@@ -73,11 +84,40 @@ impl StoreWorker {
     }
 }
 
+fn received_file_bytes(paths: &[PathBuf]) -> Option<u64> {
+    if paths.is_empty() {
+        return None;
+    }
+    paths.iter().try_fold(0u64, |total, path| {
+        let metadata = std::fs::symlink_metadata(path).ok()?;
+        // Received paths describe top-level items. Directory metadata length is
+        // not its content size, so preserve the offered total for directory transfers.
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return None;
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if metadata.file_attributes() & 0x400 != 0 {
+                return None;
+            }
+        }
+        total.checked_add(metadata.len())
+    })
+}
+
 pub fn unix_time_ms(time: SystemTime) -> u64 {
     time.duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis()
         .min(u64::MAX as u128) as u64
+}
+
+pub fn average_bytes_per_second(record: &TransferHistoryRecord) -> Option<u64> {
+    (record.duration_ms > 0).then(|| {
+        (u128::from(record.transferred_bytes) * 1000 / u128::from(record.duration_ms))
+            .min(u128::from(u64::MAX)) as u64
+    })
 }
 
 pub fn format_timestamp_utc(timestamp_ms: u64) -> String {
@@ -107,6 +147,73 @@ pub fn format_timestamp_utc(timestamp_ms: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn record(transferred_bytes: u64, duration_ms: u64) -> TransferHistoryRecord {
+        TransferHistoryRecord {
+            started_at_unix_ms: 0,
+            finished_at_unix_ms: duration_ms,
+            direction: omdrop_host::TransferDirection::Receive,
+            peer: "iPhone".into(),
+            file_count: 1,
+            file_bytes: Some(transferred_bytes),
+            transferred_bytes,
+            duration_ms,
+            outcome: omdrop_host::TransferOutcome::Completed,
+            failure_reason: None,
+            destination: None,
+            file_names: Vec::new(),
+            file_paths: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn received_sizes_only_replace_offered_totals_for_plain_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.txt");
+        let second = dir.path().join("second.txt");
+        std::fs::write(&first, b"123").unwrap();
+        std::fs::write(&second, b"45678").unwrap();
+        assert_eq!(received_file_bytes(&[first.clone(), second]), Some(8));
+        let folder = dir.path().join("folder");
+        std::fs::create_dir(&folder).unwrap();
+        std::fs::write(folder.join("nested.txt"), b"nested content").unwrap();
+        assert_eq!(received_file_bytes(&[first.clone(), folder]), None);
+        assert_eq!(
+            received_file_bytes(&[first, dir.path().join("missing.txt")]),
+            None
+        );
+        assert_eq!(received_file_bytes(&[]), None);
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn received_sizes_do_not_follow_symbolic_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("original.txt");
+        let link = dir.path().join("linked.txt");
+        std::fs::write(&file, b"file content").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&file, &link).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(&file, &link).unwrap();
+        assert_eq!(received_file_bytes(&[link]), None);
+    }
+
+    #[test]
+    fn average_speed_handles_zero_duration_fractional_seconds_and_overflow() {
+        assert_eq!(average_bytes_per_second(&record(1024, 0)), None);
+        assert_eq!(average_bytes_per_second(&record(0, 1000)), Some(0));
+        assert_eq!(average_bytes_per_second(&record(3000, 1500)), Some(2000));
+        assert_eq!(average_bytes_per_second(&record(1, 1500)), Some(0));
+        assert_eq!(
+            average_bytes_per_second(&record(u64::MAX, 1)),
+            Some(u64::MAX)
+        );
+        assert_eq!(
+            average_bytes_per_second(&record(u64::MAX, u64::MAX)),
+            Some(1000)
+        );
+    }
 
     #[test]
     fn utc_timestamp_format_handles_epoch_and_calendar_boundaries() {

@@ -4,6 +4,7 @@ use crate::{
     model::{Model, Phase, Visibility, file_size},
     native::{Action, Shell},
     preview::{FileKind, MAX_PREVIEWS},
+    scroll_area::ScrollbarExt,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -22,6 +23,12 @@ enum ExitState {
     Stopping,
     FlushingHistory(bool),
     Failed(String),
+}
+
+struct HistoryDeletion {
+    records: Vec<omdrop_host::TransferHistoryRecord>,
+    delete_files: bool,
+    remember: bool,
 }
 
 pub struct Capsule {
@@ -45,9 +52,14 @@ pub struct Capsule {
     settings_open: bool,
     history_open: bool,
     history: Vec<omdrop_host::TransferHistoryRecord>,
+    history_detail: Option<omdrop_host::TransferHistoryRecord>,
     history_loaded: bool,
     history_error: Option<String>,
-    history_clear_until: Option<Instant>,
+    history_preference_error: Option<String>,
+    history_deletion: Option<HistoryDeletion>,
+    history_deleting: bool,
+    history_delete_files: bool,
+    history_preference_pending: bool,
     history_worker: Option<crate::history::StoreWorker>,
     language_menu_open: bool,
     settings_error: Option<String>,
@@ -88,6 +100,16 @@ impl Capsule {
         if let Some(error) = language_error {
             settings_error = Some(format!("{}{error}", text.err_language_load));
         }
+        let history_delete_files = match omdrop_host::load_history_delete_files() {
+            Ok(value) => value,
+            Err(error) => {
+                settings_error = Some(format!(
+                    "{}{error:#}",
+                    text.history_delete_setting_load_error
+                ));
+                false
+            }
+        };
         let download_directory = match crate::receiving::save_directory() {
             Ok(directory) => Some(directory),
             Err(error) => {
@@ -152,9 +174,14 @@ impl Capsule {
             settings_open: false,
             history_open: false,
             history: Vec::new(),
+            history_detail: None,
             history_loaded: false,
             history_error: None,
-            history_clear_until: None,
+            history_preference_error: None,
+            history_deletion: None,
+            history_deleting: false,
+            history_delete_files,
+            history_preference_pending: false,
             history_worker: Some(history_worker),
             language_menu_open: false,
             settings_error,
@@ -188,6 +215,7 @@ impl Capsule {
             // while the receiver and radio service are being shut down.
             let mut shutdown_result = None;
             for event in events {
+                let (event, event_at, event_unix_ms) = event.with_timestamp();
                 match event {
                     Event::ShutdownDone(Ok(background_running)) => {
                         shutdown_result = Some(background_running);
@@ -208,31 +236,35 @@ impl Capsule {
                         return;
                     }
                     Event::SendDone(id, result) => {
-                        if let Some(record) = self.model.take_history_record(
-                            id,
-                            &result,
-                            Instant::now(),
-                            crate::history::unix_time_ms(std::time::SystemTime::now()),
-                        ) && let Some(worker) = &self.history_worker
+                        if let Some(record) =
+                            self.model
+                                .take_history_record(id, &result, event_at, event_unix_ms)
+                            && let Some(worker) = &self.history_worker
                         {
                             worker.append(record, Vec::new());
                         }
-                        let _ = self.model.apply(Event::SendDone(id, result));
+                        let _ = self.model.apply_at(
+                            Event::SendDone(id, result),
+                            event_at,
+                            event_unix_ms,
+                        );
                     }
                     Event::Transfer(id, event) => {
-                        let _ = self.model.apply(Event::Transfer(id, event));
+                        let _ = self.model.apply_at(
+                            Event::Transfer(id, event),
+                            event_at,
+                            event_unix_ms,
+                        );
                     }
                     Event::ReceiverActivity(event) => {
-                        let record = self.receive.history_record_for_event(
-                            &event,
-                            Instant::now(),
-                            crate::history::unix_time_ms(std::time::SystemTime::now()),
-                        );
+                        let record =
+                            self.receive
+                                .history_record_for_event(&event, event_at, event_unix_ms);
                         let received_files = match &event {
                             omdrop_core::ReceiverEvent::Received { files, .. } => files.clone(),
                             _ => Vec::new(),
                         };
-                        if self.receive.apply(&event)
+                        if self.receive.apply_at(&event, event_at, event_unix_ms)
                             && let Some(record) = record
                             && let Some(worker) = &self.history_worker
                         {
@@ -246,13 +278,19 @@ impl Capsule {
                         ));
                     }
                     Event::HistoryUpdated(Ok(_)) => self.history_error = None,
-                    Event::HistoryCleared(Err(error)) => {
+                    Event::HistoryDeleted(Err(error)) => {
                         self.history_error = Some(format!(
                             "{}{error}",
-                            self.language.strings().history_clear_error
+                            self.language.strings().history_delete_error
                         ));
                     }
-                    Event::HistoryCleared(Ok(_)) => self.history_error = None,
+                    Event::HistoryDeleted(Ok(_)) => self.history_error = None,
+                    Event::HistoryDeletePreferenceSaved(Err(error)) => {
+                        self.history_preference_error = Some(format!(
+                            "{}{error}",
+                            self.language.strings().history_delete_setting_error
+                        ));
+                    }
                     Event::ShutdownDone(Err(error)) => {
                         self.exit_state = Some(ExitState::Failed(error));
                         self.expand(true, window, cx);
@@ -285,6 +323,7 @@ impl Capsule {
         let mut changed = false;
         self.workers.retain(|worker| !worker.is_finished());
         for event in events {
+            let (event, event_at, event_unix_ms) = event.with_timestamp();
             match event {
                 Event::ShellError(error) => {
                     self.model.error = Some(error);
@@ -338,20 +377,40 @@ impl Capsule {
                     changed = true;
                     continue;
                 }
-                Event::HistoryCleared(result) => {
+                Event::HistoryDeleted(result) => {
                     match result {
                         Ok(records) => {
                             self.history = records;
                             self.history_error = None;
+                            self.history_deletion = None;
+                            self.history_detail = None;
                         }
                         Err(error) => {
                             self.history_error = Some(format!(
                                 "{}{error}",
-                                self.language.strings().history_clear_error
+                                self.language.strings().history_delete_error
                             ));
                         }
                     }
-                    self.history_clear_until = None;
+                    self.history_deleting = false;
+                    changed = true;
+                    continue;
+                }
+                Event::HistoryDeletePreferenceSaved(result) => {
+                    self.history_preference_pending = false;
+                    match result {
+                        Ok(value) => {
+                            self.history_delete_files = value;
+                            self.history_preference_error = None;
+                        }
+                        Err(error) => {
+                            let message = format!(
+                                "{}{error}",
+                                self.language.strings().history_delete_setting_error
+                            );
+                            self.history_preference_error = Some(message);
+                        }
+                    }
                     changed = true;
                     continue;
                 }
@@ -433,17 +492,14 @@ impl Capsule {
                     continue;
                 }
                 Event::ReceiverActivity(event) => {
-                    let finished_at = Instant::now();
-                    let record = self.receive.history_record_for_event(
-                        &event,
-                        finished_at,
-                        crate::history::unix_time_ms(std::time::SystemTime::now()),
-                    );
+                    let record =
+                        self.receive
+                            .history_record_for_event(&event, event_at, event_unix_ms);
                     let received_files = match &event {
                         omdrop_core::ReceiverEvent::Received { files, .. } => files.clone(),
                         _ => Vec::new(),
                     };
-                    let applied = self.receive.apply(&event);
+                    let applied = self.receive.apply_at(&event, event_at, event_unix_ms);
                     if applied
                         && let Some(record) = record
                         && let Some(worker) = &self.history_worker
@@ -485,16 +541,12 @@ impl Capsule {
                 self.clear_previews(window);
             }
             let send_record = if let Event::SendDone(id, result) = &event {
-                self.model.take_history_record(
-                    *id,
-                    result,
-                    Instant::now(),
-                    crate::history::unix_time_ms(std::time::SystemTime::now()),
-                )
+                self.model
+                    .take_history_record(*id, result, event_at, event_unix_ms)
             } else {
                 None
             };
-            changed |= self.model.apply(event);
+            changed |= self.model.apply_at(event, event_at, event_unix_ms);
             if let Some(record) = send_record
                 && let Some(worker) = &self.history_worker
             {
@@ -617,13 +669,8 @@ impl Capsule {
         changed |= self.receive.expire_notice(now);
         changed |= self.model.expire_speed(now);
         changed |= self.receive.expire_speed(now);
-        if self
-            .history_clear_until
-            .is_some_and(|deadline| now >= deadline)
-        {
-            self.history_clear_until = None;
-            changed = true;
-        }
+        changed |= self.model.phase.busy() && self.model.send_elapsed(now).is_some();
+        changed |= self.receive.active.is_some() && self.receive.receive_elapsed(now).is_some();
         if self
             .receiver_declined_until
             .is_some_and(|deadline| Instant::now() >= deadline)
@@ -738,7 +785,9 @@ impl Capsule {
         self.drop_hovered = false;
         self.settings_open = false;
         self.history_open = false;
-        self.history_clear_until = None;
+        if !self.history_deleting {
+            self.history_deletion = None;
+        }
         self.language_menu_open = false;
         self.finish_name_edit(window);
         self.name_saved = false;
@@ -971,9 +1020,13 @@ impl Capsule {
             self.firmware.open = false;
             self.firmware.confirm_exit = false;
             cx.notify();
+        } else if self.history_open && self.history_deletion.is_some() {
+            self.cancel_history_deletion(cx);
+        } else if self.history_open && self.history_detail.is_some() {
+            self.history_detail = None;
+            cx.notify();
         } else if self.history_open {
             self.history_open = false;
-            self.history_clear_until = None;
             self.focus.focus(window);
             cx.notify();
         } else if self.settings_open {
@@ -1065,31 +1118,76 @@ impl Capsule {
     }
 
     fn open_history(&mut self, cx: &mut Context<Self>) {
-        if self.settings_open && !self.firmware.busy && self.receive.active.is_none() {
+        if self.can_open_history() {
             self.history_open = true;
-            self.history_clear_until = None;
+            self.history_detail = None;
+            self.language_menu_open = false;
+            if !self.history_deleting {
+                self.history_deletion = None;
+            }
             cx.notify();
         }
     }
 
-    fn clear_history(&mut self, cx: &mut Context<Self>) {
-        if self.history.is_empty() && self.history_error.is_none() {
+    fn can_open_history(&self) -> bool {
+        !self.firmware.open
+            && !self.firmware.busy
+            && !self.model.phase.busy()
+            && self.receive.active.is_none()
+            && self.incoming.is_none()
+            && !self.picker_open
+            && self.name_input.is_none()
+    }
+
+    fn request_history_deletion(
+        &mut self,
+        records: Vec<omdrop_host::TransferHistoryRecord>,
+        cx: &mut Context<Self>,
+    ) {
+        if records.is_empty() || self.history_deleting || self.history_preference_pending {
             return;
         }
-        if self.history_clear_until.is_some() {
-            if let Some(worker) = &self.history_worker {
-                worker.clear();
-            }
-            self.history_clear_until = None;
+        self.history_deletion = Some(HistoryDeletion {
+            records,
+            delete_files: self.history_delete_files,
+            remember: false,
+        });
+        self.history_error = None;
+        cx.notify();
+    }
+
+    fn confirm_history_deletion(&mut self, cx: &mut Context<Self>) {
+        if self.history_deleting {
+            return;
+        }
+        if let (Some(deletion), Some(worker)) = (&self.history_deletion, &self.history_worker) {
+            worker.delete(
+                deletion.records.clone(),
+                deletion.delete_files,
+                deletion.remember,
+            );
+            self.history_deleting = true;
+            self.history_preference_pending |= deletion.remember;
             self.history_error = None;
-        } else {
-            self.history_clear_until = Some(Instant::now() + Duration::from_secs(5));
         }
         cx.notify();
     }
 
-    fn cancel_clear_history(&mut self, cx: &mut Context<Self>) {
-        self.history_clear_until = None;
+    fn cancel_history_deletion(&mut self, cx: &mut Context<Self>) {
+        if !self.history_deleting {
+            self.history_deletion = None;
+        }
+        cx.notify();
+    }
+
+    fn toggle_history_delete_default(&mut self, cx: &mut Context<Self>) {
+        if self.history_preference_pending || self.history_deleting {
+            return;
+        }
+        if let Some(worker) = &self.history_worker {
+            worker.save_delete_preference(!self.history_delete_files);
+            self.history_preference_pending = true;
+        }
         cx.notify();
     }
 
@@ -1234,6 +1332,7 @@ impl Capsule {
         let (status, color) = self.status_text();
         let show_back = self.incoming.is_none()
             && (self.settings_open
+                || self.history_open
                 || self.firmware.open
                 || (self.model.phase == Phase::Ready
                     && (!self.model.files.is_empty() || self.model.validating)));
@@ -1271,6 +1370,7 @@ impl Capsule {
                                     .child("Omdrop"),
                             ),
                     )
+                    .child(div().id("window-drag-spacer").flex_1().min_w_0().h(px(28.)))
                     .child(
                         div()
                             .flex()
@@ -1278,23 +1378,27 @@ impl Capsule {
                             .gap(px(8.))
                             .when(
                                 !self.settings_open
+                                    && !self.history_open
                                     && !self.firmware.open
                                     && self.incoming.is_none(),
                                 |controls| {
                                     controls.child(
                                         div()
                                             .id("open-firmware")
-                                            .h(px(28.))
-                                            .px(px(8.))
+                                            .size(px(28.))
                                             .flex_shrink_0()
                                             .rounded_full()
                                             .bg(rgb(SURFACE))
                                             .flex()
                                             .items_center()
+                                            .justify_center()
                                             .text_size(px(11.))
                                             .font_weight(FontWeight::MEDIUM)
                                             .text_color(rgb(MUTED))
-                                            .child(text.firmware_title)
+                                            .child(firmware_icon())
+                                            .tooltip(move |window, cx| {
+                                                icon_tooltip(text.firmware_title, window, cx)
+                                            })
                                             .when(self.can_open_firmware(), |control| {
                                                 control.cursor_pointer().hover(|s| {
                                                     s.bg(rgb(0x393940)).text_color(rgb(INK))
@@ -1309,7 +1413,41 @@ impl Capsule {
                                     )
                                 },
                             )
-                            .when(!self.settings_open, |controls| {
+                            .when(
+                                !self.settings_open
+                                    && !self.history_open
+                                    && !self.firmware.open
+                                    && self.incoming.is_none(),
+                                |controls| {
+                                    controls.child(
+                                        div()
+                                            .id("history")
+                                            .size(px(28.))
+                                            .rounded_full()
+                                            .bg(rgb(SURFACE))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .text_color(rgb(MUTED))
+                                            .child(history_icon())
+                                            .tooltip(move |window, cx| {
+                                                icon_tooltip(text.history_title, window, cx)
+                                            })
+                                            .when(self.can_open_history(), |control| {
+                                                control.cursor_pointer().hover(|s| {
+                                                    s.bg(rgb(0x393940)).text_color(rgb(INK))
+                                                })
+                                            })
+                                            .when(!self.can_open_history(), |control| {
+                                                control.opacity(0.4)
+                                            })
+                                            .on_click(
+                                                cx.listener(|this, _, _, cx| this.open_history(cx)),
+                                            ),
+                                    )
+                                },
+                            )
+                            .when(!self.settings_open && !self.history_open, |controls| {
                                 controls.child(
                                     div()
                                         .id("settings")
@@ -1321,6 +1459,9 @@ impl Capsule {
                                         .justify_center()
                                         .text_color(rgb(MUTED))
                                         .child(settings_gear())
+                                        .tooltip(move |window, cx| {
+                                            icon_tooltip(text.settings_title, window, cx)
+                                        })
                                         .when(
                                             !self.model.phase.busy()
                                                 && !self.picker_open
@@ -1407,42 +1548,43 @@ impl Capsule {
                                             }),
                                         ),
                                 )
-                                .when(self.settings_open || self.firmware.open, |row| {
-                                    row.child(
-                                        div()
-                                            .id("page-title")
-                                            .absolute()
-                                            .left(px(80.))
-                                            .right(px(80.))
-                                            .top(px(0.))
-                                            .h(px(24.))
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .text_size(px(13.))
-                                            .line_height(px(18.))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .child(if self.history_open {
-                                                text.history_title
-                                            } else if self.firmware.open {
-                                                text.firmware_title
-                                            } else {
-                                                text.settings_title
-                                            }),
-                                    )
-                                }),
+                                .when(
+                                    self.settings_open || self.history_open || self.firmware.open,
+                                    |row| {
+                                        row.child(
+                                            div()
+                                                .id("page-title")
+                                                .absolute()
+                                                .left(px(80.))
+                                                .right(px(80.))
+                                                .top(px(0.))
+                                                .h(px(24.))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .text_size(px(13.))
+                                                .line_height(px(18.))
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .child(if self.history_open {
+                                                    text.history_title
+                                                } else if self.firmware.open {
+                                                    text.firmware_title
+                                                } else {
+                                                    text.settings_title
+                                                }),
+                                        )
+                                    },
+                                ),
                         )
                     })
                     .child(if self.incoming.is_some() {
                         self.incoming_view(cx)
                     } else if self.firmware.open {
                         self.firmware_view(cx)
+                    } else if self.history_open {
+                        self.history_view(cx)
                     } else if self.settings_open {
-                        if self.history_open {
-                            self.history_view(cx)
-                        } else {
-                            self.settings_view(cx)
-                        }
+                        self.settings_view(cx)
                     } else if self.model.phase != Phase::Ready {
                         self.transfer_view(cx)
                     } else if self.receive.active.is_some() && self.model.files.is_empty() {
@@ -2250,7 +2392,7 @@ impl Capsule {
                                 .id("language-menu")
                                 .w_full()
                                 .max_h(px(240.))
-                                .overflow_y_scroll()
+                                .visible_scrollbar()
                                 .rounded(px(10.))
                                 .border_1()
                                 .border_color(rgba(0xffffff18))
@@ -2264,6 +2406,7 @@ impl Capsule {
                                     div()
                                         .id(("language-option", language as u32))
                                         .h(px(30.))
+                                        .flex_shrink_0()
                                         .px(px(8.))
                                         .rounded(px(6.))
                                         .bg(rgb(if selected { 0x163353 } else { 0x1c1c1f }))
@@ -2337,7 +2480,7 @@ impl Capsule {
             .id("settings-page")
             .flex_1()
             .min_h_0()
-            .overflow_y_scroll()
+            .visible_scrollbar()
             .flex()
             .flex_col()
             .gap(px(12.))
@@ -2360,6 +2503,42 @@ impl Capsule {
                             .on_click(cx.listener(|this, _, _, cx| this.open_history(cx))),
                     ),
             )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .rounded(px(16.))
+                    .bg(rgb(SURFACE))
+                    .p(px(16.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .child(
+                        checkbox(
+                            "history-delete-default",
+                            text.history_delete_default,
+                            self.history_delete_files,
+                        )
+                        .when(
+                            self.history_preference_pending || self.history_deleting,
+                            |control| control.opacity(0.4),
+                        )
+                        .on_click(
+                            cx.listener(|this, _, _, cx| this.toggle_history_delete_default(cx)),
+                        ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(rgb(MUTED))
+                            .child(text.history_delete_default_hint),
+                    ),
+            )
+            .children(self.history_preference_error.as_ref().map(|error| {
+                div()
+                    .id("history-preference-error")
+                    .flex_shrink_0()
+                    .child(self.error_view(error))
+            }))
             .child(
                 div()
                     .flex_shrink_0()
@@ -2409,7 +2588,7 @@ impl Capsule {
                             .id("settings-device-name")
                             .w_full()
                             .max_h(px(88.))
-                            .overflow_y_scroll()
+                            .visible_scrollbar()
                             .whitespace_normal()
                             .text_size(px(17.))
                             .line_height(px(22.))
@@ -2566,16 +2745,22 @@ impl Capsule {
     }
 
     fn history_view(&self, cx: &mut Context<Self>) -> AnyElement {
-        use omdrop_host::{TransferDirection, TransferFailureReason, TransferOutcome};
+        use omdrop_host::{TransferDirection, TransferOutcome};
         let text = self.language.strings();
+        if let Some(deletion) = &self.history_deletion {
+            return self.history_delete_view(deletion, cx);
+        }
+        if let Some(record) = &self.history_detail {
+            return self.history_detail_view(record, cx);
+        }
         let mut list = div()
             .id("history-list")
             .flex_1()
             .min_h_0()
-            .overflow_y_scroll()
+            .visible_scrollbar()
             .flex()
             .flex_col()
-            .gap(px(8.));
+            .gap(px(6.));
         if self.history.is_empty() {
             list = list.child(
                 div()
@@ -2607,43 +2792,38 @@ impl Capsule {
                 .file_bytes
                 .map(file_size)
                 .unwrap_or_else(|| text.history_size_unknown.into());
-            let summary = self.language.history_summary(
-                record.file_count,
-                &file_size_text,
-                &file_size(record.transferred_bytes),
-                &self.language.history_duration(record.duration_ms),
-            );
-            let timestamp = crate::history::format_timestamp_utc(record.finished_at_unix_ms);
-            let failure = match record.failure_reason {
-                Some(TransferFailureReason::Connection) => Some(text.history_failure_connection),
-                Some(TransferFailureReason::Validation) => Some(text.history_failure_validation),
-                Some(TransferFailureReason::Other) => Some(text.history_failure_other),
-                None => None,
+            let file_overview = match record.file_names.first() {
+                Some(name) if record.file_count == 1 => name.clone(),
+                Some(name) => format!("{} · {name}", self.language.file_count(record.file_count)),
+                None => self.language.file_count(record.file_count),
             };
-            let destination = (record.outcome == TransferOutcome::Completed)
-                .then(|| record.destination.clone())
-                .flatten();
+            let timestamp = crate::history::format_timestamp_utc(record.finished_at_unix_ms);
+            let detail_record = record.clone();
+            let delete_record = record.clone();
             list = list.child(
                 div()
                     .id(("history-entry", index))
                     .flex_shrink_0()
-                    .rounded(px(12.))
+                    .rounded(px(10.))
                     .bg(rgb(SURFACE))
-                    .p(px(12.))
+                    .p(px(10.))
                     .flex()
                     .flex_col()
-                    .gap(px(5.))
+                    .gap(px(4.))
                     .child(
                         div()
                             .flex()
+                            .flex_shrink_0()
                             .items_center()
                             .justify_between()
                             .gap(px(8.))
                             .child(
                                 div()
+                                    .flex_1()
                                     .min_w_0()
                                     .truncate()
                                     .text_size(px(12.))
+                                    .line_height(px(16.))
                                     .font_weight(FontWeight::MEDIUM)
                                     .child(format!("{direction} {}", record.peer)),
                             )
@@ -2651,78 +2831,81 @@ impl Capsule {
                                 div()
                                     .flex_shrink_0()
                                     .text_size(px(10.))
+                                    .line_height(px(16.))
                                     .text_color(rgb(color))
                                     .child(outcome),
                             ),
                     )
                     .child(
                         div()
-                            .text_size(px(10.))
+                            .flex()
+                            .flex_shrink_0()
+                            .items_center()
+                            .gap(px(8.))
+                            .text_size(px(11.))
+                            .line_height(px(16.))
                             .text_color(rgb(MUTED))
-                            .child(timestamp),
+                            .child(div().flex_1().min_w_0().truncate().child(file_overview))
+                            .child(div().flex_shrink_0().child(file_size_text)),
                     )
                     .child(
                         div()
-                            .text_size(px(10.))
-                            .text_color(rgb(MUTED))
-                            .child(summary),
-                    )
-                    .when_some(failure, |entry, failure| {
-                        entry.child(
-                            div()
-                                .text_size(px(10.))
-                                .text_color(rgb(0xffb56b))
-                                .child(failure),
-                        )
-                    })
-                    .when_some(destination, |entry, destination| {
-                        entry.child(
-                            div()
-                                .id(("history-location", index))
-                                .h(px(28.))
-                                .px(px(10.))
-                                .rounded(px(7.))
-                                .bg(rgb(0x393940))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .text_size(px(10.))
-                                .cursor_pointer()
-                                .child(text.history_open_location)
-                                .hover(|style| style.bg(rgb(0x484850)))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.open_history_folder(destination.clone(), cx)
-                                })),
-                        )
-                    }),
+                            .flex()
+                            .flex_shrink_0()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_size(px(10.))
+                                    .text_color(rgb(MUTED))
+                                    .child(timestamp),
+                            )
+                            .child(
+                                button("history-details", text.history_details, false)
+                                    .id(("history-details", index))
+                                    .h(px(28.))
+                                    .min_w(px(60.))
+                                    .px(px(12.))
+                                    .flex_shrink_0()
+                                    .rounded(px(7.))
+                                    .text_size(px(11.))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.history_detail = Some(detail_record.clone());
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                button("history-delete", text.history_delete, false)
+                                    .id(("history-delete", index))
+                                    .h(px(28.))
+                                    .min_w(px(60.))
+                                    .px(px(12.))
+                                    .flex_shrink_0()
+                                    .rounded(px(7.))
+                                    .text_size(px(11.))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.request_history_deletion(
+                                            vec![delete_record.clone()],
+                                            cx,
+                                        )
+                                    })),
+                            ),
+                    ),
             );
         }
 
-        let clear_controls = if self.history_clear_until.is_some() {
-            div()
-                .flex()
-                .gap(px(8.))
-                .child(
-                    button("confirm-clear-history", text.history_clear_confirm, true)
-                        .flex_1()
-                        .on_click(cx.listener(|this, _, _, cx| this.clear_history(cx))),
-                )
-                .child(
-                    button("cancel-clear-history", text.history_clear_cancel, false)
-                        .flex_1()
-                        .on_click(cx.listener(|this, _, _, cx| this.cancel_clear_history(cx))),
-                )
-                .into_any_element()
-        } else {
-            button("clear-history", text.history_clear, false)
-                .w_full()
-                .when(
-                    self.history.is_empty() && self.history_error.is_none(),
-                    |button| button.opacity(0.4).cursor(CursorStyle::Arrow),
-                )
-                .on_click(cx.listener(|this, _, _, cx| this.clear_history(cx)))
-                .into_any_element()
-        };
+        let clear_controls = button("clear-history", text.history_clear, false)
+            .w_full()
+            .when(
+                self.history.is_empty() || self.history_preference_pending,
+                |button| button.opacity(0.4).cursor(CursorStyle::Arrow),
+            )
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.request_history_deletion(this.history.clone(), cx)
+            }));
 
         div()
             .id("history-page")
@@ -2738,7 +2921,353 @@ impl Capsule {
                     .as_ref()
                     .map(|error| self.error_view(error)),
             )
+            .children(self.history_preference_error.as_ref().map(|error| {
+                div()
+                    .id("history-preference-error")
+                    .flex_shrink_0()
+                    .child(self.error_view(error))
+            }))
             .into_any_element()
+    }
+
+    fn history_detail_view(
+        &self,
+        record: &omdrop_host::TransferHistoryRecord,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use omdrop_host::{TransferDirection, TransferFailureReason, TransferOutcome};
+        let text = self.language.strings();
+        let direction = match record.direction {
+            TransferDirection::Send => text.history_direction_send,
+            TransferDirection::Receive => text.history_direction_receive,
+        };
+        let (outcome, color) = match record.outcome {
+            TransferOutcome::Completed => (text.history_completed, 0x30d158),
+            TransferOutcome::Declined => (text.history_declined, MUTED),
+            TransferOutcome::Cancelled => (text.history_cancelled, MUTED),
+            TransferOutcome::Failed => (text.history_failed, 0xffb56b),
+        };
+        let failure = match record.failure_reason {
+            Some(TransferFailureReason::Connection) => Some(text.history_failure_connection),
+            Some(TransferFailureReason::Validation) => Some(text.history_failure_validation),
+            Some(TransferFailureReason::Other) => Some(text.history_failure_other),
+            None => None,
+        };
+        let selected = record.clone();
+        let mut files = div()
+            .id("history-detail-files")
+            .flex_1()
+            .min_h_0()
+            .visible_scrollbar()
+            .flex()
+            .flex_col()
+            .gap(px(8.));
+        files = files
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .whitespace_normal()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(format!("{direction} {}", record.peer)),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_size(px(11.))
+                            .text_color(rgb(color))
+                            .child(outcome),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_size(px(10.))
+                    .text_color(rgb(MUTED))
+                    .child(crate::history::format_timestamp_utc(
+                        record.finished_at_unix_ms,
+                    )),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_size(px(11.))
+                    .line_height(px(17.))
+                    .whitespace_normal()
+                    .text_color(rgb(MUTED))
+                    .child(
+                        self.language.history_summary(
+                            record.file_count,
+                            &record
+                                .file_bytes
+                                .map(file_size)
+                                .unwrap_or_else(|| text.history_size_unknown.into()),
+                            &file_size(record.transferred_bytes),
+                            &self.language.history_duration(record.duration_ms),
+                        ),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_size(px(11.))
+                    .text_color(rgb(MUTED))
+                    .child(
+                        self.language.history_average_speed(
+                            &crate::history::average_bytes_per_second(record)
+                                .map(file_size)
+                                .unwrap_or_else(|| "—".into()),
+                        ),
+                    ),
+            )
+            .when_some(failure, |details, failure| {
+                details.child(
+                    div()
+                        .flex_shrink_0()
+                        .text_size(px(11.))
+                        .text_color(rgb(0xffb56b))
+                        .whitespace_normal()
+                        .child(failure),
+                )
+            });
+        if record.file_names.is_empty() {
+            files = files.child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(rgb(MUTED))
+                    .child(text.history_files_unknown),
+            );
+        } else {
+            for name in &record.file_names {
+                files = files.child(
+                    div()
+                        .flex_shrink_0()
+                        .text_size(px(12.))
+                        .whitespace_normal()
+                        .child(name.clone()),
+                );
+            }
+        }
+        for (index, path) in record.file_paths.iter().enumerate() {
+            let location = path.clone();
+            files = files.child(
+                div()
+                    .flex_shrink_0()
+                    .rounded(px(10.))
+                    .bg(rgb(SURFACE))
+                    .p(px(10.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(rgb(MUTED))
+                            .whitespace_normal()
+                            .child(path.display().to_string()),
+                    )
+                    .child(
+                        button("history-file-location", text.history_open_location, false)
+                            .id(("history-file-location", index))
+                            .h(px(28.))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.open_history_folder(location.clone(), cx)
+                            })),
+                    ),
+            );
+        }
+        // Older records only retain the receive folder, so keep that location usable.
+        if record.file_paths.is_empty()
+            && let Some(destination) = &record.destination
+        {
+            let destination = destination.clone();
+            files = files.child(
+                button("history-old-location", text.history_open_location, false).on_click(
+                    cx.listener(move |this, _, _, cx| {
+                        this.open_history_folder(destination.clone(), cx)
+                    }),
+                ),
+            );
+        }
+        div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .child(files)
+            .child(
+                button("history-detail-delete", text.history_delete, false).on_click(cx.listener(
+                    move |this, _, _, cx| this.request_history_deletion(vec![selected.clone()], cx),
+                )),
+            )
+            .children(
+                self.history_error
+                    .as_ref()
+                    .map(|error| self.error_view(error)),
+            )
+            .children(self.history_preference_error.as_ref().map(|error| {
+                div()
+                    .id("history-preference-error")
+                    .flex_shrink_0()
+                    .child(self.error_view(error))
+            }))
+            .into_any_element()
+    }
+
+    fn history_delete_view(
+        &self,
+        deletion: &HistoryDeletion,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let text = self.language.strings();
+        let body = div()
+            .w_full()
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_size(px(17.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(text.history_delete_prompt),
+            )
+            .child(
+                div()
+                    .id("delete-history-items")
+                    .flex_shrink_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .children(deletion.records.iter().map(|record| {
+                        div()
+                            .flex_shrink_0()
+                            .text_size(px(11.))
+                            .whitespace_normal()
+                            .child(format!(
+                                "{} · {}",
+                                record.peer,
+                                if record.file_names.is_empty() {
+                                    self.language.file_count(record.file_count)
+                                } else {
+                                    record
+                                        .file_names
+                                        .iter()
+                                        .take(3)
+                                        .cloned()
+                                        .collect::<Vec<_>>()
+                                        .join(" · ")
+                                }
+                            ))
+                    })),
+            )
+            .child(
+                checkbox(
+                    "delete-history-files",
+                    text.history_delete_files,
+                    deletion.delete_files,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if !this.history_deleting
+                        && let Some(deletion) = &mut this.history_deletion
+                    {
+                        deletion.delete_files = !deletion.delete_files;
+                        cx.notify();
+                    }
+                })),
+            )
+            .when(deletion.delete_files, |view| {
+                view.child(
+                    div()
+                        .flex_shrink_0()
+                        .text_size(px(11.))
+                        .text_color(rgb(0xffb56b))
+                        .whitespace_normal()
+                        .child(text.history_delete_files_hint),
+                )
+            })
+            .when(
+                deletion.delete_files
+                    && deletion
+                        .records
+                        .iter()
+                        .any(|record| record.file_paths.is_empty()),
+                |view| {
+                    view.child(
+                        div()
+                            .flex_shrink_0()
+                            .text_size(px(11.))
+                            .text_color(rgb(MUTED))
+                            .whitespace_normal()
+                            .child(text.history_delete_unavailable),
+                    )
+                },
+            )
+            .child(
+                checkbox(
+                    "remember-history-deletion",
+                    text.history_delete_remember,
+                    deletion.remember,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if !this.history_deleting
+                        && let Some(deletion) = &mut this.history_deletion
+                    {
+                        deletion.remember = !deletion.remember;
+                        cx.notify();
+                    }
+                })),
+            )
+            .children(
+                self.history_error
+                    .as_ref()
+                    .map(|error| self.error_view(error)),
+            )
+            .children(self.history_preference_error.as_ref().map(|error| {
+                div()
+                    .id("history-preference-error")
+                    .flex_shrink_0()
+                    .child(self.error_view(error))
+            }))
+            .into_any_element();
+        let actions = div()
+            .flex()
+            .gap(px(8.))
+            .child(
+                button(
+                    "confirm-delete-history",
+                    if self.history_deleting {
+                        text.history_delete_pending
+                    } else {
+                        text.history_delete_confirm
+                    },
+                    true,
+                )
+                .flex_1()
+                .when(self.history_deleting, |button| button.opacity(0.4))
+                .on_click(cx.listener(|this, _, _, cx| this.confirm_history_deletion(cx))),
+            )
+            .child(
+                button("cancel-delete-history", text.cancel, false)
+                    .flex_1()
+                    .when(self.history_deleting, |button| button.opacity(0.4))
+                    .on_click(cx.listener(|this, _, _, cx| this.cancel_history_deletion(cx))),
+            );
+        crate::share_layout::page_with_actions(
+            "history-delete-confirmation",
+            body,
+            actions.into_any_element(),
+        )
+        .into_any_element()
     }
 
     fn answer_incoming(&mut self, accepted: bool, cx: &mut Context<Self>) {
@@ -2788,6 +3317,13 @@ impl Capsule {
             .receive
             .speed_bytes_per_second
             .map(|bytes| self.language.transfer_speed(&file_size(bytes)));
+        let elapsed = self
+            .receive
+            .receive_elapsed(Instant::now())
+            .map(|duration| {
+                self.language
+                    .transfer_elapsed(duration.as_millis().min(u64::MAX as u128) as u64)
+            });
         let (title, detail, fraction) = match transfer.phase {
             ReceivePhase::Waiting => (
                 text.receive_waiting_title,
@@ -2900,6 +3436,14 @@ impl Capsule {
             .when_some(speed, |view, speed| {
                 view.child(div().text_size(px(11.)).text_color(rgb(MUTED)).child(speed))
             })
+            .when_some(elapsed, |view, elapsed| {
+                view.child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(rgb(MUTED))
+                        .child(elapsed),
+                )
+            })
             .when(!compact, |view| {
                 view.child(
                     div()
@@ -2941,7 +3485,7 @@ impl Capsule {
                 div()
                     .id("incoming-files")
                     .max_h(px(160.))
-                    .overflow_y_scroll()
+                    .visible_scrollbar()
                     .text_size(px(12.))
                     .text_color(rgb(MUTED))
                     .children(request.transfer.files.iter().map(|file| {
@@ -3113,7 +3657,7 @@ impl Capsule {
             .id("devices")
             .flex_1()
             .min_h_0()
-            .overflow_y_scroll()
+            .visible_scrollbar()
             .flex()
             .flex_col()
             .gap(px(7.));
@@ -3152,6 +3696,7 @@ impl Capsule {
             devices = devices.child(
                 div()
                     .id(("peer", index))
+                    .flex_shrink_0()
                     .flex()
                     .items_center()
                     .gap(px(12.))
@@ -3240,7 +3785,7 @@ impl Capsule {
                                     .id("file-name")
                                     .w_full()
                                     .max_h(px(96.))
-                                    .overflow_y_scroll()
+                                    .visible_scrollbar()
                                     .whitespace_normal()
                                     .text_size(px(12.))
                                     .line_height(px(16.))
@@ -3467,6 +4012,14 @@ impl Capsule {
                 );
             }
         }
+        if let Some(duration) = self.model.send_elapsed(Instant::now()) {
+            view = view.child(
+                div().text_size(px(11.)).text_color(rgb(MUTED)).child(
+                    self.language
+                        .transfer_elapsed(duration.as_millis().min(u64::MAX as u128) as u64),
+                ),
+            );
+        }
         view = view.children(
             self.model
                 .error
@@ -3524,8 +4077,9 @@ impl Capsule {
             .flex_shrink_0()
             .w_full()
             .max_h(px(65.))
-            .overflow_y_scroll()
+            .visible_scrollbar()
             .text_size(px(10.))
+            .whitespace_normal()
             .text_color(rgb(0xffb56b))
             .child(error.to_string())
             .into_any_element()
@@ -3600,6 +4154,112 @@ impl Render for Capsule {
             })
     }
 }
+struct IconTooltip(&'static str);
+
+impl Render for IconTooltip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px(px(9.))
+            .py(px(5.))
+            .rounded(px(6.))
+            .bg(rgb(0x393940))
+            .text_size(px(11.))
+            .text_color(rgb(INK))
+            .child(self.0)
+    }
+}
+
+fn icon_tooltip(label: &'static str, _: &mut Window, cx: &mut App) -> AnyView {
+    cx.new(|_| IconTooltip(label)).into()
+}
+
+fn checkbox(id: &'static str, label: &'static str, checked: bool) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .cursor_pointer()
+        .child(
+            div()
+                .size(px(17.))
+                .flex_shrink_0()
+                .rounded(px(4.))
+                .border_1()
+                .border_color(rgb(if checked { BLUE } else { MUTED }))
+                .bg(rgb(if checked { BLUE } else { SURFACE }))
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(px(12.))
+                .child(if checked { "✓" } else { "" }),
+        )
+        .child(div().text_size(px(11.)).whitespace_normal().child(label))
+}
+
+fn firmware_icon() -> impl IntoElement {
+    canvas(
+        |_, _, _| (),
+        |bounds, _, window, _| {
+            let at = |x, y| bounds.origin + point(px(x), px(y));
+            let mut chip = PathBuilder::stroke(px(1.25));
+            chip.move_to(at(4., 4.));
+            chip.line_to(at(12., 4.));
+            chip.line_to(at(12., 12.));
+            chip.line_to(at(4., 12.));
+            chip.close();
+            for pin in [5., 8., 11.] {
+                for (from, to) in [
+                    ((pin, 1.5), (pin, 4.)),
+                    ((pin, 12.), (pin, 14.5)),
+                    ((1.5, pin), (4., pin)),
+                    ((12., pin), (14.5, pin)),
+                ] {
+                    chip.move_to(at(from.0, from.1));
+                    chip.line_to(at(to.0, to.1));
+                }
+            }
+            if let Ok(path) = chip.build() {
+                window.paint_path(path, window.text_style().color);
+            }
+        },
+    )
+    .size(px(16.))
+    .flex_shrink_0()
+}
+
+fn history_icon() -> impl IntoElement {
+    canvas(
+        |_, _, _| (),
+        |bounds, _, window, _| {
+            let at = |x, y| bounds.origin + point(px(x), px(y));
+            let mut clock = PathBuilder::stroke(px(1.25));
+            for index in 0..=32 {
+                let angle =
+                    -std::f32::consts::PI * 0.8 + index as f32 * std::f32::consts::TAU * 0.88 / 32.;
+                let position = at(8. + angle.cos() * 6., 8. + angle.sin() * 6.);
+                if index == 0 {
+                    clock.move_to(position);
+                } else {
+                    clock.line_to(position);
+                }
+            }
+            clock.move_to(at(1.5, 2.));
+            clock.line_to(at(1.5, 6.));
+            clock.line_to(at(5.5, 6.));
+            clock.move_to(at(8., 4.5));
+            clock.line_to(at(8., 8.));
+            clock.line_to(at(10.5, 9.5));
+            if let Ok(path) = clock.build() {
+                window.paint_path(path, window.text_style().color);
+            }
+        },
+    )
+    .size(px(16.))
+    .flex_shrink_0()
+}
+
 fn settings_gear() -> impl IntoElement {
     canvas(
         |_, _, _| (),

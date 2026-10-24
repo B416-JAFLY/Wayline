@@ -7,6 +7,15 @@ use windows::Win32::{
 };
 
 pub const CORNER_RADIUS: f32 = 28.;
+const DRAG_HEADER_HEIGHT: f32 = 56.;
+const DRAG_CONTROL_RESERVE: f32 = 156.;
+
+#[allow(dead_code)] // Shared with preview builds that only use the corner hit-test.
+fn is_draggable_header(x: f32, y: f32, width: f32, scale: f32) -> bool {
+    let header_height = DRAG_HEADER_HEIGHT * scale;
+    let reserved = DRAG_CONTROL_RESERVE * scale;
+    y >= 0. && y <= header_height && x < width - reserved
+}
 
 /// Called on the owning UI thread before a frame-changing SetWindowPos.
 pub fn configure(hwnd: HWND, width: i32, height: i32) {
@@ -93,9 +102,43 @@ pub fn transparent_corner(hwnd: HWND, location: LPARAM) -> bool {
     }
 }
 
+/// Returns true for the non-interactive portion of the custom header.
+/// The right side is reserved for the firmware, history, settings and close controls.
+#[allow(dead_code)] // This module is also compiled into borderless preview examples.
+pub fn draggable_header(hwnd: HWND, location: LPARAM) -> bool {
+    let mut point = POINT {
+        x: location.0 as u16 as i16 as i32,
+        y: (location.0 as u32 >> 16) as u16 as i16 as i32,
+    };
+    let mut rect = RECT::default();
+    // SAFETY: Win32 writes only to these live stack values on the UI thread.
+    unsafe {
+        if !ScreenToClient(hwnd, &mut point).as_bool() || GetClientRect(hwnd, &mut rect).is_err() {
+            return false;
+        }
+        let scale = GetDpiForWindow(hwnd).max(96) as f32 / 96.;
+        let width = (rect.right - rect.left) as f32;
+        is_draggable_header(point.x as f32, point.y as f32, width, scale)
+    }
+}
+
+/// Client-coordinate variant used on WM_LBUTTONDOWN before GPUI dispatches the click.
+#[allow(dead_code)] // This module is also compiled into borderless preview examples.
+pub fn draggable_client_point(hwnd: HWND, x: i32, y: i32) -> bool {
+    let mut rect = RECT::default();
+    // SAFETY: Win32 writes only to this live stack value on the UI thread.
+    unsafe {
+        if GetClientRect(hwnd, &mut rect).is_err() {
+            return false;
+        }
+        let scale = GetDpiForWindow(hwnd).max(96) as f32 / 96.;
+        is_draggable_header(x as f32, y as f32, (rect.right - rect.left) as f32, scale)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::contains;
+    use super::{contains, is_draggable_header};
 
     #[test]
     fn transparent_corners_do_not_capture_hits_at_any_dpi() {
@@ -123,6 +166,30 @@ mod tests {
                 assert!(hit(width / 2., height / 2.));
                 assert!(!hit(-1., height / 2.));
             }
+        }
+    }
+
+    #[test]
+    fn header_drag_reserves_the_right_side_for_controls() {
+        for scale in [1., 1.25, 1.5, 2.] {
+            assert!(is_draggable_header(
+                120. * scale,
+                28. * scale,
+                356. * scale,
+                scale
+            ));
+            assert!(!is_draggable_header(
+                220. * scale,
+                28. * scale,
+                356. * scale,
+                scale
+            ));
+            assert!(!is_draggable_header(
+                120. * scale,
+                70. * scale,
+                356. * scale,
+                scale
+            ));
         }
     }
 }

@@ -191,12 +191,26 @@ impl Language {
         fill(self.strings().transfer_speed, &[("speed", speed.into())])
     }
 
+    pub fn transfer_elapsed(self, duration_ms: u64) -> String {
+        fill(
+            self.strings().transfer_elapsed,
+            &[("duration", self.history_duration(duration_ms / 1000 * 1000))],
+        )
+    }
+
+    pub fn history_average_speed(self, speed: &str) -> String {
+        fill(
+            self.strings().history_average_speed,
+            &[("speed", speed.into())],
+        )
+    }
+
     pub fn history_duration(self, duration_ms: u64) -> String {
         let total_seconds = duration_ms.saturating_add(999) / 1000;
         if total_seconds < 60 {
             fill(
                 self.strings().history_duration_seconds,
-                &[("count", total_seconds.max(1).to_string())],
+                &[("count", total_seconds.to_string())],
             )
         } else {
             fill(

@@ -188,11 +188,38 @@ keep every translation complete. Low-level diagnostics from shared modules (tran
 local settings validation) remain in their source wording. Full receive errors go to `desktop-receiver.log`.
 
 Active send and receive cards show a smoothed speed from progress events; it returns to zero
-after one second without progress. The latest 200 records live separately in
-`%LOCALAPPDATA%\omdrop\transfer-history.json`, written atomically under a process lock.
-Success is recorded only after final protocol confirmation. Records distinguish original file
-bytes from transfer-stream bytes and store no file contents or send paths; receive destinations
-are retained only for successful receives. Clearing history never deletes received files.
+after one second without progress. Elapsed time starts at the first `Uploading` or `Receiving`
+event, including a zero-byte event, and runs through final confirmation. Preparation and waiting
+for acceptance are excluded. History average speed divides transfer-stream bytes by this duration.
+The sharing card header provides Device firmware and Recent transfers icons.
+
+Pages, lists and long text use a shared scroll area. When content exceeds the viewport, a
+persistent proportional scrollbar supports the mouse wheel, thumb dragging and track clicks.
+Nested areas scroll the inner content first, then the outer area at its boundary. Bottom
+actions remain fixed, including the history deletion confirmation's confirm and cancel buttons.
+
+Up to 200 records live separately in `%LOCALAPPDATA%\omdrop\transfer-history.json`, written
+atomically under a process lock. The complete history JSON is limited to 4 MiB; the oldest whole
+records are evicted to satisfy both limits. A single record that exceeds the 4 MiB limit reports
+an explicit error. Success is recorded only after final protocol confirmation.
+Records distinguish original file bytes from transfer-stream bytes and retain file names, sent
+source paths and successful receive paths, but no file contents. Each recorded file can open its
+location; older version-1 records without file details remain readable.
+The compact list uses three lines for device/outcome, file overview/size and time/actions.
+Details contains transfer counters, elapsed time, average speed, the complete file list,
+locations and failure reasons.
+
+Deleting a record or clearing history always opens a confirmation with Also delete files and
+Remember this option. Both are initially unchecked. Remembering changes only the file-deletion
+default, stored as `history_delete_files` in `desktop.json` (absent means `false`); Settings can
+change the same default, and confirmation is still required every time. File deletion permanently
+removes only explicitly recorded regular files, including sent source files; it never recursively
+deletes save directories or follows symbolic links or Windows reparse points. Missing files are
+treated as already deleted; other deletion errors keep the affected history available for retry.
+Transferred folders retain their top-level names and paths for display and opening their locations.
+If any selected record contains a folder, Also delete files rejects the whole batch during
+preflight and retains all records, protecting files added to that folder after the transfer.
+Open the folder's location to manage its contents, or uncheck Also delete files to delete only history.
 
 Incoming transfers require confirmation. Completion requires archive validation and the final
 protocol response. Firmware maintenance pauses the idle receiver and rejects active transfers
@@ -210,6 +237,15 @@ Space or the preview button toggles connection state; Esc closes the preview.
 Pass options after `--`: `--borderless` previews the transparent window,
 `--notice`, `--long-notice` or `--expanded-notice` previews receive feedback,
 and `--long-content` stresses scrolling content. Add `--check-layout` for a one-frame bounds check.
+
+Preview the shared scroll component without hardware:
+
+```powershell
+cargo run -p omdrop-desktop --example scroll_preview --locked
+```
+
+The buttons or keys 1/2/3 select long, short and nested content; Esc closes the preview. Use it
+to check overflow visibility, wheel scrolling, thumb dragging, track clicks and fixed bottom actions.
 
 `orb_geometry.rs` handles bounded projection and connection transitions; `orb.rs` pauses
 animation on hidden pages. `window_frame.rs` preserves per-pixel alpha and excludes transparent

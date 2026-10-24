@@ -31,6 +31,8 @@ mod preview;
 #[cfg(windows)]
 mod receiving;
 #[cfg(windows)]
+mod scroll_area;
+#[cfg(windows)]
 mod settings;
 #[cfg(windows)]
 mod share_layout;

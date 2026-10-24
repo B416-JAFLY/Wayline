@@ -6,7 +6,10 @@ use omdrop_core::{DiscoveryEvent, NearbyReceiver, SendEvent};
 use omdrop_host::{
     TransferDirection, TransferFailureReason, TransferHistoryRecord, TransferOutcome,
 };
-use std::{path::PathBuf, time::Instant};
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Visibility {
@@ -87,6 +90,9 @@ pub struct Model {
     pub speed_bytes_per_second: Option<u64>,
     pub send_started_at: Option<Instant>,
     pub send_started_at_unix_ms: u64,
+    send_finished_at: Option<(Instant, u64)>,
+    send_history_pending: bool,
+    send_file_paths: Vec<PathBuf>,
     pub send_file_count: usize,
     pub send_file_bytes: u64,
     pub send_transferred_bytes: u64,
@@ -97,7 +103,16 @@ pub struct Model {
     speed: crate::transfer_speed::TransferSpeed,
 }
 impl Model {
+    #[cfg(test)]
     pub fn apply(&mut self, event: Event) -> bool {
+        self.apply_at(
+            event,
+            Instant::now(),
+            crate::history::unix_time_ms(std::time::SystemTime::now()),
+        )
+    }
+
+    pub(crate) fn apply_at(&mut self, event: Event, now: Instant, now_unix_ms: u64) -> bool {
         match event {
             Event::FilesValidated(id, paths, result) if id == self.selection_id => {
                 self.validating = false;
@@ -182,8 +197,12 @@ impl Model {
                         Phase::Waiting
                     }
                     SendEvent::Uploading { sent, total } => {
+                        if self.send_started_at.is_none() {
+                            self.send_started_at = Some(now);
+                            self.send_started_at_unix_ms = now_unix_ms;
+                        }
                         self.send_transferred_bytes = sent;
-                        self.speed.update(Instant::now(), sent);
+                        self.speed.update(now, sent);
                         self.speed_bytes_per_second = self
                             .speed
                             .available()
@@ -198,10 +217,22 @@ impl Model {
                         self.send_file_bytes = report.source_bytes;
                         self.send_transferred_bytes = report.archive_bytes;
                         self.send_confirmed = true;
+                        self.send_finished_at.get_or_insert((now, now_unix_ms));
                         self.reset_speed();
                         Phase::Complete
                     }
                 };
+            }
+            Event::Transfer(id, SendEvent::Uploading { sent, .. })
+                if id == self.send_id && self.phase == Phase::Cancelling =>
+            {
+                // The worker may have queued progress before the cancel click reached it.
+                // Keep the accounting while leaving the cancellation UI in place.
+                if self.send_started_at.is_none() {
+                    self.send_started_at = Some(now);
+                    self.send_started_at_unix_ms = now_unix_ms;
+                }
+                self.send_transferred_bytes = sent;
             }
             Event::Transfer(id, SendEvent::Completed(report))
                 if id == self.send_id && self.phase == Phase::Cancelling =>
@@ -211,8 +242,10 @@ impl Model {
                 self.send_file_bytes = report.source_bytes;
                 self.send_transferred_bytes = report.archive_bytes;
                 self.send_confirmed = true;
+                self.send_finished_at.get_or_insert((now, now_unix_ms));
             }
             Event::SendDone(id, result) if id == self.send_id => {
+                self.send_finished_at.get_or_insert((now, now_unix_ms));
                 self.reset_speed();
                 if self.phase == Phase::Cancelling {
                     // A final 200 can race a user's cancel click. Preserve delivery evidence.
@@ -283,6 +316,10 @@ impl Model {
         self.selected = None;
         self.target.clear();
         self.error = None;
+        self.send_started_at = None;
+        self.send_finished_at = None;
+        self.send_history_pending = false;
+        self.send_file_paths.clear();
     }
     pub fn selected_peer(&self) -> Option<&NearbyReceiver> {
         self.peers
@@ -304,6 +341,18 @@ impl Model {
             return None;
         }
         let peer = self.selected_peer()?.clone();
+        let paths = match self
+            .files
+            .iter()
+            .map(std::path::absolute)
+            .collect::<std::io::Result<Vec<_>>>()
+        {
+            Ok(paths) => paths,
+            Err(error) => {
+                self.error = Some(error.to_string());
+                return None;
+            }
+        };
         // Sending owns a snapshot of the selected receiver. The remaining
         // discovery callbacks must not clear it or replace a transfer error.
         self.scan_id += 1;
@@ -313,8 +362,11 @@ impl Model {
         self.target = peer.name.clone();
         self.phase = Phase::Preparing;
         self.error = None;
-        self.send_started_at = Some(Instant::now());
+        self.send_started_at = None;
         self.send_started_at_unix_ms = crate::history::unix_time_ms(std::time::SystemTime::now());
+        self.send_finished_at = None;
+        self.send_history_pending = true;
+        self.send_file_paths = paths;
         self.send_file_count = self.files.len();
         self.send_file_bytes = self.bytes;
         self.send_transferred_bytes = 0;
@@ -342,10 +394,13 @@ impl Model {
         finished_at: Instant,
         finished_at_unix_ms: u64,
     ) -> Option<TransferHistoryRecord> {
-        if id != self.send_id {
+        if id != self.send_id || !self.send_history_pending {
             return None;
         }
-        let started_at = self.send_started_at.take()?;
+        self.send_history_pending = false;
+        let (_, terminal_unix_ms) = *self
+            .send_finished_at
+            .get_or_insert((finished_at, finished_at_unix_ms));
         let (outcome, failure_reason, transferred_bytes) = if self.send_confirmed || result.is_ok()
         {
             (
@@ -383,19 +438,41 @@ impl Model {
         };
         Some(TransferHistoryRecord {
             started_at_unix_ms: self.send_started_at_unix_ms,
-            finished_at_unix_ms: finished_at_unix_ms.max(self.send_started_at_unix_ms),
+            finished_at_unix_ms: terminal_unix_ms.max(self.send_started_at_unix_ms),
             direction: TransferDirection::Send,
             peer: self.target.clone(),
             file_count: self.send_file_count,
+            file_names: self
+                .send_file_paths
+                .iter()
+                .map(|path| {
+                    path.file_name()
+                        .unwrap_or(path.as_os_str())
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect(),
+            file_paths: self.send_file_paths.clone(),
             file_bytes: Some(self.send_file_bytes),
             transferred_bytes,
-            duration_ms: finished_at
-                .saturating_duration_since(started_at)
+            duration_ms: self
+                .send_elapsed(finished_at)
+                .unwrap_or_default()
                 .as_millis()
                 .min(u64::MAX as u128) as u64,
             outcome,
             failure_reason,
             destination: None,
+        })
+    }
+
+    /// Preparation and waiting for acceptance do not count as data transfer time.
+    pub fn send_elapsed(&self, now: Instant) -> Option<Duration> {
+        self.send_started_at.map(|started| {
+            self.send_finished_at
+                .map(|(finished, _)| finished)
+                .unwrap_or(now)
+                .saturating_duration_since(started)
         })
     }
 
@@ -581,6 +658,7 @@ mod tests {
         let mut model = Model {
             send_id: 5,
             send_started_at: Some(started),
+            send_history_pending: true,
             send_started_at_unix_ms: 100,
             send_file_count: 2,
             send_file_bytes: 4096,
@@ -603,6 +681,271 @@ mod tests {
         assert_eq!(record.file_bytes, Some(4096));
         assert!(record.duration_ms >= 1000);
     }
+
+    #[test]
+    fn send_elapsed_starts_with_upload_and_freezes_after_confirmation() {
+        let mut model = Model {
+            peers: vec![receiver("phone")],
+            selected: Some("phone".into()),
+            ..searching_model()
+        };
+        model.begin_send().unwrap();
+        let now = Instant::now();
+        assert_eq!(model.send_elapsed(now + Duration::from_secs(30)), None);
+        assert!(!model.apply_at(
+            Event::Transfer(
+                0,
+                SendEvent::Uploading {
+                    sent: 0,
+                    total: 100
+                }
+            ),
+            now,
+            1000,
+        ));
+        assert_eq!(model.send_elapsed(now), None);
+        model.apply_at(
+            Event::Transfer(
+                1,
+                SendEvent::WaitingForAcceptance {
+                    receiver: "iPhone".into(),
+                },
+            ),
+            now,
+            1000,
+        );
+        model.apply_at(
+            Event::Transfer(
+                1,
+                SendEvent::Uploading {
+                    sent: 0,
+                    total: 100,
+                },
+            ),
+            now + Duration::from_secs(30),
+            31_000,
+        );
+        model.apply_at(
+            Event::Transfer(
+                1,
+                SendEvent::Uploading {
+                    sent: 100,
+                    total: 100,
+                },
+            ),
+            now + Duration::from_secs(32),
+            33_000,
+        );
+        model.apply_at(
+            Event::Transfer(1, SendEvent::WaitingForConfirmation),
+            now + Duration::from_secs(32),
+            33_000,
+        );
+        assert_eq!(
+            model.send_elapsed(now + Duration::from_secs(34)),
+            Some(Duration::from_secs(4))
+        );
+        model.apply_at(
+            Event::Transfer(
+                1,
+                SendEvent::Completed(omdrop_core::SendReport {
+                    receiver: "iPhone".into(),
+                    files: 1,
+                    source_bytes: 100,
+                    archive_bytes: 100,
+                    format: omdrop_core::SendFormat::Auto,
+                }),
+            ),
+            now + Duration::from_secs(35),
+            36_000,
+        );
+        model.files.clear();
+        let record = model
+            .take_history_record(1, &Ok(()), now + Duration::from_secs(45), 46_000)
+            .unwrap();
+        assert_eq!(record.started_at_unix_ms, 31_000);
+        assert_eq!(record.duration_ms, 5000);
+        assert_eq!(record.file_names, vec!["photo.png"]);
+        assert!(record.file_paths[0].is_absolute());
+        assert_eq!(
+            model.send_elapsed(now + Duration::from_secs(60)),
+            Some(Duration::from_secs(5))
+        );
+        assert!(model.take_history_record(1, &Ok(()), now, 46_000).is_none());
+    }
+
+    #[test]
+    fn send_declined_before_upload_has_no_transfer_duration() {
+        let mut model = Model {
+            peers: vec![receiver("phone")],
+            selected: Some("phone".into()),
+            ..searching_model()
+        };
+        model.begin_send().unwrap();
+        let record = model
+            .take_history_record(
+                1,
+                &Err(SendFailure::Declined),
+                Instant::now() + Duration::from_secs(60),
+                u64::MAX,
+            )
+            .unwrap();
+        assert_eq!(record.duration_ms, 0);
+        assert_eq!(model.send_elapsed(Instant::now()), None);
+    }
+
+    #[test]
+    fn cancelling_send_accounts_for_queued_progress_without_restoring_upload_ui() {
+        let mut model = Model {
+            peers: vec![receiver("phone")],
+            selected: Some("phone".into()),
+            ..searching_model()
+        };
+        model.begin_send().unwrap();
+        model.phase = Phase::Cancelling;
+        let started = Instant::now();
+        for (seconds, sent) in [(0, 0), (2, 512)] {
+            assert!(model.apply_at(
+                Event::Transfer(1, SendEvent::Uploading { sent, total: 1024 }),
+                started + Duration::from_secs(seconds),
+                1000 + seconds * 1000,
+            ));
+            assert_eq!(model.phase, Phase::Cancelling);
+            assert_eq!(model.speed_bytes_per_second, None);
+        }
+        let record = model
+            .take_history_record(
+                1,
+                &Err(SendFailure::Cancelled),
+                started + Duration::from_secs(3),
+                4000,
+            )
+            .unwrap();
+        assert_eq!(record.started_at_unix_ms, 1000);
+        assert_eq!(record.duration_ms, 3000);
+        assert_eq!(record.transferred_bytes, 512);
+        assert_eq!(record.outcome, TransferOutcome::Cancelled);
+    }
+
+    #[test]
+    fn send_completion_freezes_both_clocks_before_worker_cleanup() {
+        let started = Instant::now();
+        let mut model = Model {
+            send_id: 1,
+            phase: Phase::Cancelling,
+            send_started_at: Some(started),
+            send_started_at_unix_ms: 1000,
+            send_history_pending: true,
+            ..Default::default()
+        };
+        model.apply_at(
+            Event::Transfer(
+                1,
+                SendEvent::Completed(omdrop_core::SendReport {
+                    receiver: "iPhone".into(),
+                    files: 1,
+                    source_bytes: 100,
+                    archive_bytes: 100,
+                    format: omdrop_core::SendFormat::Auto,
+                }),
+            ),
+            started + Duration::from_secs(2),
+            3000,
+        );
+        let record = model
+            .take_history_record(1, &Ok(()), started + Duration::from_secs(10), 11_000)
+            .unwrap();
+        model.apply_at(
+            Event::SendDone(1, Ok(())),
+            started + Duration::from_secs(10),
+            11_000,
+        );
+        assert_eq!(record.duration_ms, 2000);
+        assert_eq!(record.finished_at_unix_ms, 3000);
+        assert_eq!(
+            record.finished_at_unix_ms - record.started_at_unix_ms,
+            record.duration_ms
+        );
+        assert_eq!(
+            model.send_elapsed(started + Duration::from_secs(20)),
+            Some(Duration::from_secs(2))
+        );
+    }
+
+    #[test]
+    fn batched_events_keep_worker_duration_and_average_speed_for_short_transfers() {
+        let mut model = Model {
+            peers: vec![receiver("phone")],
+            selected: Some("phone".into()),
+            ..searching_model()
+        };
+        model.begin_send().unwrap();
+        let started = Instant::now();
+        let events = [
+            Event::Timestamped(
+                Box::new(Event::Transfer(
+                    1,
+                    SendEvent::Uploading {
+                        sent: 0,
+                        total: 1024,
+                    },
+                )),
+                started,
+                1000,
+            ),
+            Event::Timestamped(
+                Box::new(Event::Transfer(
+                    1,
+                    SendEvent::Completed(omdrop_core::SendReport {
+                        receiver: "iPhone".into(),
+                        files: 1,
+                        source_bytes: 1024,
+                        archive_bytes: 1024,
+                        format: omdrop_core::SendFormat::Auto,
+                    }),
+                )),
+                started + Duration::from_millis(50),
+                1050,
+            ),
+        ];
+        // Consume both events in one UI poll, without sleeping between them.
+        for event in events {
+            let (event, at, unix_ms) = event.with_timestamp();
+            model.apply_at(event, at, unix_ms);
+        }
+        let record = model
+            .take_history_record(1, &Ok(()), started + Duration::from_secs(1), 2000)
+            .unwrap();
+        assert_eq!(record.duration_ms, 50);
+        assert_eq!(record.finished_at_unix_ms, 1050);
+        assert_eq!(
+            crate::history::average_bytes_per_second(&record),
+            Some(20_480)
+        );
+    }
+
+    #[test]
+    fn send_snapshot_resolves_relative_parent_components_without_filesystem_access() {
+        let mut model = Model {
+            files: vec![PathBuf::from(r"missing-folder\..\photo.png")],
+            peers: vec![receiver("phone")],
+            selected: Some("phone".into()),
+            ..searching_model()
+        };
+        model.begin_send().unwrap();
+        let record = model
+            .take_history_record(1, &Err(SendFailure::Cancelled), Instant::now(), u64::MAX)
+            .unwrap();
+        assert_eq!(
+            record.file_paths,
+            vec![std::path::absolute("photo.png").unwrap()]
+        );
+        assert!(record.file_paths[0].components().all(|component| !matches!(
+            component,
+            std::path::Component::ParentDir | std::path::Component::CurDir
+        )));
+    }
+
     #[test]
     fn live_discovery_keeps_row_order_and_selection_until_selected_device_is_removed() {
         let mut model = searching_model();

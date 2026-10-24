@@ -470,6 +470,30 @@ impl Shell {
             .name("omdrop-history-folder".into())
             .spawn(move || {
                 let result = (|| -> Result<()> {
+                    let metadata = std::fs::metadata(&path)
+                        .with_context(|| format!("无法访问文件位置 {}", path.display()))?;
+                    if metadata.is_file() {
+                        use windows::Win32::System::Com::{
+                            COINIT_APARTMENTTHREADED, CoInitializeEx, CoTaskMemFree, CoUninitialize,
+                        };
+                        // SAFETY: this dedicated worker owns its COM apartment. The terminated
+                        // path lives through parsing, and the shell PIDL is freed after selection.
+                        unsafe {
+                            CoInitializeEx(None, COINIT_APARTMENTTHREADED)
+                                .ok()
+                                .context("无法初始化文件位置浏览")?;
+                            let mut item = std::ptr::null_mut();
+                            let name: Vec<u16> =
+                                path.as_os_str().encode_wide().chain(Some(0)).collect();
+                            let result =
+                                SHParseDisplayName(PCWSTR(name.as_ptr()), None, &mut item, 0, None)
+                                    .and_then(|()| SHOpenFolderAndSelectItems(item, None, 0));
+                            CoTaskMemFree(Some(item.cast()));
+                            CoUninitialize();
+                            result.context("无法在资源管理器中显示文件")?;
+                        }
+                        return Ok(());
+                    }
                     let folder: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
                     let mut info = SHELLEXECUTEINFOW {
                         cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
@@ -608,8 +632,32 @@ unsafe extern "system" fn subclass(
         // those insets creates the dark rectangular rim outside our surface.
         return LRESULT(0);
     }
+    if message == WM_LBUTTONDOWN {
+        let x = lp.0 as u16 as i16 as i32;
+        let y = (lp.0 as u32 >> 16) as u16 as i16 as i32;
+        if crate::window_frame::draggable_client_point(hwnd, x, y) {
+            // SAFETY: this is the live window handle and the message parameters are
+            // the standard Win32 caption-drag command. ReleaseCapture prevents the
+            // client hitbox from retaining the mouse while Windows starts the move.
+            unsafe {
+                let _ = ReleaseCapture();
+                let _ = SendMessageW(
+                    hwnd,
+                    WM_NCLBUTTONDOWN,
+                    Some(WPARAM(HTCAPTION as usize)),
+                    Some(LPARAM(0)),
+                );
+            }
+            return LRESULT(0);
+        }
+    }
     if message == WM_NCHITTEST && crate::window_frame::transparent_corner(hwnd, lp) {
         return LRESULT(HTTRANSPARENT as isize);
+    }
+    if message == WM_NCHITTEST && crate::window_frame::draggable_header(hwnd, lp) {
+        // Keep the point in the client area so our WM_LBUTTONDOWN handler can
+        // explicitly enter the system caption-drag loop below.
+        return LRESULT(HTCLIENT as isize);
     }
     if message == PLACE_MESSAGE {
         Shell::position(hwnd, wp.0 & 1 != 0, wp.0 & 2 != 0, wp.0 & 4 != 0);

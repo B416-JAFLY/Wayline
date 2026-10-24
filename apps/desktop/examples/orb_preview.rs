@@ -17,6 +17,9 @@ mod orb;
 #[path = "../src/orb_geometry.rs"]
 mod orb_geometry;
 #[cfg(windows)]
+#[path = "../src/scroll_area.rs"]
+mod scroll_area;
+#[cfg(windows)]
 #[path = "../src/share_layout.rs"]
 mod share_layout;
 #[cfg(windows)]

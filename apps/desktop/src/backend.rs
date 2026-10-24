@@ -46,6 +46,7 @@ impl LinkStatus {
 }
 
 pub enum Event {
+    Timestamped(Box<Event>, Instant, u64),
     FilesValidated(u64, Vec<PathBuf>, Result<u64, String>),
     FilePreview(u64, usize, std::sync::Arc<gpui::RenderImage>),
     Status(Result<LinkStatus, String>),
@@ -57,7 +58,8 @@ pub enum Event {
     ReceiverActivity(omdrop_core::ReceiverEvent),
     HistoryLoaded(Result<Vec<omdrop_host::TransferHistoryRecord>, String>),
     HistoryUpdated(Result<Vec<omdrop_host::TransferHistoryRecord>, String>),
-    HistoryCleared(Result<Vec<omdrop_host::TransferHistoryRecord>, String>),
+    HistoryDeleted(Result<Vec<omdrop_host::TransferHistoryRecord>, String>),
+    HistoryDeletePreferenceSaved(Result<bool, String>),
     HistoryFlushed,
     DownloadDirectorySaved(Result<PathBuf, String>),
     RadioChannelChanged(Result<Status, String>),
@@ -65,6 +67,28 @@ pub enum Event {
     ShutdownDone(Result<bool, String>),
     Firmware(crate::firmware::Event),
     ShellError(String),
+}
+
+impl Event {
+    /// Capture transfer time on the worker, before UI polling or shell work can delay it.
+    pub fn timestamped(self) -> Self {
+        Self::Timestamped(
+            Box::new(self),
+            Instant::now(),
+            crate::history::unix_time_ms(std::time::SystemTime::now()),
+        )
+    }
+
+    pub fn with_timestamp(self) -> (Self, Instant, u64) {
+        match self {
+            Self::Timestamped(event, at, unix_ms) => (*event, at, unix_ms),
+            event => (
+                event,
+                Instant::now(),
+                crate::history::unix_time_ms(std::time::SystemTime::now()),
+            ),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -423,6 +447,7 @@ pub fn send(
     tx: Sender<Event>,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
+        let mut terminal_event = None;
         let result = (|| -> Result<()> {
             let signal = cancel.clone();
             let _session = UsageSession::acquire(SessionKind::Send, move || signal.cancel())?;
@@ -438,7 +463,7 @@ pub fn send(
                 legacy_ble: false,
             };
             let mut last = Instant::now();
-            omdrop_core::send_to_receiver_cancellable(
+            let result = omdrop_core::send_to_receiver_cancellable(
                 &peer,
                 &identity,
                 &files,
@@ -452,12 +477,25 @@ pub fn send(
                         }
                         last = Instant::now();
                     }
-                    let _ = tx.send(Event::Transfer(id, event));
+                    let _ = tx.send(Event::Transfer(id, event).timestamped());
                 },
-            )?;
+            );
+            // Session cleanup can wait for the lease watcher. Freeze transfer failure
+            // time before that wait, while still delivering SendDone after cleanup.
+            terminal_event = Some(
+                Event::SendDone(
+                    id,
+                    result
+                        .map(|_| ())
+                        .map_err(|error| SendFailure::from(anyhow::Error::from(error))),
+                )
+                .timestamped(),
+            );
             Ok(())
         })();
-        let _ = tx.send(Event::SendDone(id, result.map_err(SendFailure::from)));
+        let _ = tx.send(terminal_event.unwrap_or_else(|| {
+            Event::SendDone(id, result.map_err(SendFailure::from)).timestamped()
+        }));
     })
 }
 

@@ -1,4 +1,5 @@
 //! Shared sharing-card layout, also rendered by the hardware-free orb preview.
+use crate::scroll_area::ScrollbarExt;
 use gpui::*;
 
 pub fn empty_share(illustration: AnyElement, action: AnyElement) -> impl IntoElement {
@@ -24,7 +25,7 @@ pub fn page_with_actions(
                 .id((id, 0_usize))
                 .flex_1()
                 .min_h_0()
-                .overflow_y_scroll()
+                .visible_scrollbar()
                 .flex()
                 .flex_col()
                 .child(content),
@@ -68,7 +69,7 @@ pub fn notice_banner(
                 .min_w_0()
                 .max_h(px(160.))
                 .flex_shrink_0()
-                .overflow_y_scroll()
+                .visible_scrollbar()
                 .p(px(10.))
                 .text_size(px(11.))
                 .line_height(px(17.))

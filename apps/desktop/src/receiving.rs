@@ -20,7 +20,6 @@ use std::{
 pub struct IncomingRequest {
     pub transfer: IncomingTransfer,
     pub save_dir: PathBuf,
-    pub started_at: Instant,
     pub started_at_unix_ms: u64,
     pub decision: Sender<bool>,
     pub accepting: Arc<AtomicBool>,
@@ -48,12 +47,20 @@ pub struct Transfer {
     pub id: String,
     pub sender: String,
     pub files: usize,
+    pub file_names: Vec<String>,
     pub save_dir: PathBuf,
     pub phase: Phase,
-    pub started_at: Instant,
+    pub started_at: Option<Instant>,
     pub started_at_unix_ms: u64,
     pub file_bytes: Option<u64>,
     pub transferred_bytes: u64,
+}
+
+impl Transfer {
+    pub fn elapsed(&self, now: Instant) -> Option<Duration> {
+        self.started_at
+            .map(|started| now.saturating_duration_since(started))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,6 +102,7 @@ pub struct Model {
     notice_generation: u64,
     pub speed_bytes_per_second: Option<u64>,
     speed: crate::transfer_speed::TransferSpeed,
+    finished_elapsed: Option<Duration>,
 }
 
 impl Model {
@@ -230,16 +238,21 @@ impl Model {
     }
 
     pub fn begin(&mut self, transfer: &IncomingTransfer, save_dir: PathBuf) {
-        let started_at = Instant::now();
         let file_bytes = offered_file_bytes(transfer);
         self.interrupted = None;
+        self.finished_elapsed = None;
         self.active = Some(Transfer {
             id: transfer.id.clone(),
             sender: transfer.sender_name.clone(),
             files: transfer.files.len(),
+            file_names: transfer
+                .files
+                .iter()
+                .map(|file| file.name.clone())
+                .collect(),
             save_dir,
             phase: Phase::Waiting,
-            started_at,
+            started_at: None,
             started_at_unix_ms: crate::history::unix_time_ms(std::time::SystemTime::now()),
             file_bytes,
             transferred_bytes: 0,
@@ -252,6 +265,7 @@ impl Model {
         let Some(active) = self.active.take() else {
             return false;
         };
+        self.finished_elapsed = active.elapsed(Instant::now());
         self.reset_speed();
         self.interrupted = Some(active);
         self.show_notice(message, NoticeKind::Error);
@@ -270,10 +284,39 @@ impl Model {
 
     /// Only transfer-scoped events can finish the current receive. Discovery
     /// connections can fail independently while the upload is still healthy.
+    #[cfg(test)]
     pub fn apply(&mut self, event: &ReceiverEvent) -> bool {
+        self.apply_at(
+            event,
+            Instant::now(),
+            crate::history::unix_time_ms(std::time::SystemTime::now()),
+        )
+    }
+
+    pub(crate) fn apply_at(
+        &mut self,
+        event: &ReceiverEvent,
+        now: Instant,
+        now_unix_ms: u64,
+    ) -> bool {
         // Radio polling and transfer callbacks use different queues. A terminal
         // transfer event can arrive after a status interrupt moved it aside.
         if self.active.is_none() {
+            if let ReceiverEvent::Receiving {
+                transfer_id,
+                received,
+                ..
+            } = event
+                && let Some(interrupted) = self.interrupted.as_mut()
+                && transfer_id == &interrupted.id
+            {
+                // Account for queued progress without undoing the disconnect UI.
+                if interrupted.started_at.is_none() {
+                    interrupted.started_at = Some(now);
+                    interrupted.started_at_unix_ms = now_unix_ms;
+                }
+                interrupted.transferred_bytes = *received;
+            }
             let terminal_id = match event {
                 ReceiverEvent::Received { transfer, .. } => Some(transfer.id.as_str()),
                 ReceiverEvent::TransferFailed { transfer_id, .. } => Some(transfer_id.as_str()),
@@ -294,7 +337,11 @@ impl Model {
                 received,
                 total,
             } if transfer_id == &active.id => {
-                self.speed.update(Instant::now(), *received);
+                if active.started_at.is_none() {
+                    active.started_at = Some(now);
+                    active.started_at_unix_ms = now_unix_ms;
+                }
+                self.speed.update(now, *received);
                 self.speed_bytes_per_second = self
                     .speed
                     .available()
@@ -316,6 +363,7 @@ impl Model {
                     files.len(),
                     &active.save_dir.display().to_string(),
                 );
+                self.finished_elapsed = active.elapsed(now);
                 self.active = None;
                 self.reset_speed();
                 self.show_notice(message, NoticeKind::Success);
@@ -333,6 +381,7 @@ impl Model {
                     omdrop_core::TransferFailureKind::Connection => text.receive_connection,
                     _ => text.receive_failed,
                 };
+                self.finished_elapsed = active.elapsed(now);
                 self.active = None;
                 self.reset_speed();
                 // Keep the banner short; full diagnostics remain available on demand.
@@ -392,16 +441,29 @@ impl Model {
             direction: TransferDirection::Receive,
             peer: transfer.sender.clone(),
             file_count: transfer.files,
+            file_names: transfer.file_names.clone(),
+            file_paths: match event {
+                ReceiverEvent::Received { files, .. } => files.clone(),
+                _ => Vec::new(),
+            },
             file_bytes: transfer.file_bytes,
             transferred_bytes: transfer.transferred_bytes,
-            duration_ms: finished_at
-                .saturating_duration_since(transfer.started_at)
+            duration_ms: transfer
+                .elapsed(finished_at)
+                .unwrap_or_default()
                 .as_millis()
                 .min(u64::MAX as u128) as u64,
             outcome,
             failure_reason,
             destination: (outcome == TransferOutcome::Completed).then(|| transfer.save_dir.clone()),
         })
+    }
+
+    pub fn receive_elapsed(&self, now: Instant) -> Option<Duration> {
+        self.active
+            .as_ref()
+            .and_then(|transfer| transfer.elapsed(now))
+            .or(self.finished_elapsed)
     }
 
     pub fn expire_speed(&mut self, now: Instant) -> bool {
@@ -438,7 +500,7 @@ fn offered_file_bytes(transfer: &IncomingTransfer) -> Option<u64> {
 pub fn declined_history_record(
     request: &IncomingRequest,
     finished_at_unix_ms: u64,
-    finished_at: Instant,
+    _finished_at: Instant,
 ) -> TransferHistoryRecord {
     let file_bytes = offered_file_bytes(&request.transfer);
     TransferHistoryRecord {
@@ -447,12 +509,16 @@ pub fn declined_history_record(
         direction: TransferDirection::Receive,
         peer: request.transfer.sender_name.clone(),
         file_count: request.transfer.files.len(),
+        file_names: request
+            .transfer
+            .files
+            .iter()
+            .map(|file| file.name.clone())
+            .collect(),
+        file_paths: Vec::new(),
         file_bytes,
         transferred_bytes: 0,
-        duration_ms: finished_at
-            .saturating_duration_since(request.started_at)
-            .as_millis()
-            .min(u64::MAX as u128) as u64,
+        duration_ms: 0,
         outcome: TransferOutcome::Declined,
         failure_reason: None,
         destination: None,
@@ -640,7 +706,6 @@ fn run(
             .send(Event::Incoming(IncomingRequest {
                 transfer: transfer.clone(),
                 save_dir: directory.clone(),
-                started_at,
                 started_at_unix_ms,
                 decision,
                 accepting: accepting.clone(),
@@ -655,11 +720,14 @@ fn run(
         if !accepted && accepting.load(Ordering::Acquire) {
             // Sending a positive answer does not guarantee the worker observed it
             // before expiry. End the UI's waiting state even in that boundary race.
-            let _ = prompt_events.send(Event::ReceiverActivity(ReceiverEvent::TransferFailed {
-                transfer_id: transfer.id.clone(),
-                error: crate::i18n::current().strings().incoming_expired.into(),
-                kind: omdrop_core::TransferFailureKind::Cancelled,
-            }));
+            let _ = prompt_events.send(
+                Event::ReceiverActivity(ReceiverEvent::TransferFailed {
+                    transfer_id: transfer.id.clone(),
+                    error: crate::i18n::current().strings().incoming_expired.into(),
+                    kind: omdrop_core::TransferFailureKind::Cancelled,
+                })
+                .timestamped(),
+            );
         }
         accepted
     }));
@@ -672,6 +740,8 @@ fn run(
     let advertised_id = service_id.clone();
     let activity_worker = thread::spawn(move || {
         for event in activity_rx {
+            let at = Instant::now();
+            let unix_ms = crate::history::unix_time_ms(std::time::SystemTime::now());
             match &event {
                 ReceiverEvent::Listening => {
                     log(&format!(
@@ -701,7 +771,14 @@ fn run(
                     log(&format!("rejected {path}: {status}"))
                 }
             }
-            if events.send(Event::ReceiverActivity(event)).is_err() {
+            if events
+                .send(Event::Timestamped(
+                    Box::new(Event::ReceiverActivity(event)),
+                    at,
+                    unix_ms,
+                ))
+                .is_err()
+            {
                 break;
             }
         }
@@ -917,6 +994,136 @@ mod tests {
             Some(TransferFailureReason::Connection)
         );
         assert!(failed.destination.is_none());
+    }
+
+    #[test]
+    fn receive_elapsed_excludes_acceptance_wait_and_freezes_when_finished() {
+        let mut offer = transfer("timed");
+        offer.files.push(omdrop_core::IncomingFile {
+            name: "photo.png".into(),
+            kind: "public.png".into(),
+            size: Some(100),
+        });
+        let mut model = Model::default();
+        model.begin(&offer, PathBuf::from("chosen folder"));
+        let now = Instant::now();
+        assert_eq!(model.receive_elapsed(now + Duration::from_secs(30)), None);
+        assert!(!model.apply_at(
+            &ReceiverEvent::Receiving {
+                transfer_id: "old".into(),
+                received: 0,
+                total: Some(100)
+            },
+            now,
+            1000,
+        ));
+        assert_eq!(model.receive_elapsed(now), None);
+        model.apply_at(
+            &ReceiverEvent::Receiving {
+                transfer_id: offer.id.clone(),
+                received: 0,
+                total: Some(100),
+            },
+            now + Duration::from_secs(30),
+            31_000,
+        );
+        model.apply_at(
+            &ReceiverEvent::Receiving {
+                transfer_id: offer.id.clone(),
+                received: 100,
+                total: Some(100),
+            },
+            now + Duration::from_secs(32),
+            33_000,
+        );
+        model.apply_at(
+            &ReceiverEvent::Confirming {
+                transfer_id: offer.id.clone(),
+            },
+            now + Duration::from_secs(32),
+            33_000,
+        );
+        assert_eq!(
+            model.receive_elapsed(now + Duration::from_secs(34)),
+            Some(Duration::from_secs(4))
+        );
+        let completed = ReceiverEvent::Received {
+            transfer: offer,
+            files: vec![PathBuf::from("saved-photo.png")],
+        };
+        let record = model
+            .history_record_for_event(&completed, now + Duration::from_secs(35), 36_000)
+            .unwrap();
+        assert_eq!(record.started_at_unix_ms, 31_000);
+        assert_eq!(record.duration_ms, 5000);
+        assert_eq!(record.file_names, vec!["photo.png"]);
+        assert_eq!(record.file_paths, vec![PathBuf::from("saved-photo.png")]);
+        model.apply_at(&completed, now + Duration::from_secs(35), 36_000);
+        assert_eq!(
+            model.receive_elapsed(now + Duration::from_secs(60)),
+            Some(Duration::from_secs(5))
+        );
+        model.begin(&transfer("next"), PathBuf::from("chosen folder"));
+        assert_eq!(model.receive_elapsed(now + Duration::from_secs(60)), None);
+    }
+
+    #[test]
+    fn receive_failure_before_data_has_no_duration_or_file_paths() {
+        let offer = transfer("waiting");
+        let mut model = Model::default();
+        model.begin(&offer, PathBuf::from("chosen folder"));
+        let event = ReceiverEvent::TransferFailed {
+            transfer_id: offer.id,
+            error: "cancelled".into(),
+            kind: omdrop_core::TransferFailureKind::Cancelled,
+        };
+        let record = model
+            .history_record_for_event(&event, Instant::now() + Duration::from_secs(60), u64::MAX)
+            .unwrap();
+        assert_eq!(record.duration_ms, 0);
+        assert!(record.file_paths.is_empty());
+    }
+
+    #[test]
+    fn interrupted_receive_preserves_queued_progress_for_late_completion() {
+        let offer = transfer("interrupted");
+        let mut model = Model::default();
+        model.begin(&offer, PathBuf::from("chosen folder"));
+        model.interrupt("disconnected".into());
+        let started = Instant::now();
+        for (seconds, received) in [(0, 0), (2, 1024)] {
+            assert!(!model.apply_at(
+                &ReceiverEvent::Receiving {
+                    transfer_id: offer.id.clone(),
+                    received,
+                    total: Some(1024)
+                },
+                started + Duration::from_secs(seconds),
+                1000 + seconds * 1000,
+            ));
+            assert!(model.active.is_none());
+            assert_eq!(model.speed_bytes_per_second, None);
+        }
+        let event = ReceiverEvent::Received {
+            transfer: offer,
+            files: vec![],
+        };
+        let finished = started + Duration::from_secs(3);
+        let record = model
+            .history_record_for_event(&event, finished, 4000)
+            .unwrap();
+        assert_eq!(record.started_at_unix_ms, 1000);
+        assert_eq!(record.duration_ms, 3000);
+        assert_eq!(record.transferred_bytes, 1024);
+        assert_eq!(
+            record.finished_at_unix_ms - record.started_at_unix_ms,
+            record.duration_ms
+        );
+        assert!(model.apply_at(&event, finished, 4000));
+        assert_eq!(
+            model.receive_elapsed(finished + Duration::from_secs(10)),
+            Some(Duration::from_secs(3))
+        );
     }
 
     #[test]

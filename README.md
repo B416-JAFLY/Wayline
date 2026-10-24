@@ -57,7 +57,7 @@ Status, sharing guide, preferences, sound settings and three-language switching.
 ## Install and use
 
 1. Extract the complete Windows x64 offline package, run `install.cmd`, and allow service installation.
-2. Connect Cardputer Adv with a data cable. Open Device firmware, select its port and board,
+2. Connect Cardputer Adv with a data cable. Click the Device firmware icon at the top of the sharing card, select its port and board,
    then install or update the firmware.
 3. Enable Bluetooth on the PC. Enable Wi-Fi and Bluetooth on iPhone and set
    AirDrop to Everyone for 10 Minutes.
@@ -69,10 +69,17 @@ Before updating, finish transfers, quit Omdrop from the tray, and close CLI comm
 
 - Received files default to Downloads/Omdrop; change the folder in Settings. Desktop and CLI
   share the device name, identity and save directory.
-- Active send and receive cards show a smoothed transfer speed. Settings keeps the latest 200
-  results with direction, device, file size, transferred bytes and outcome. Successful receive
-  records can open their save folder; history stores no file contents or send paths, and clearing
-  it never deletes received files.
+- Active send and receive cards show smoothed transfer speed and elapsed time. Timing starts
+  when data transfer begins, includes final confirmation, and excludes preparation and acceptance waits.
+- The history icon at the top of the sharing card opens Recent transfers with up to 200 results.
+  The compact list shows device, outcome, file overview, size and time. Details shows the complete
+  file list, transferred bytes, duration, average speed and each file's location. Records retain sent source paths and successful receive
+  paths without file contents; older records may have no file details.
+- Delete individual records or clear the history with confirmation every time. Also delete files
+  and Remember this option are initially unchecked. Deleting files permanently removes the sent
+  source files and received files in those records. Remembering updates the file-deletion default,
+  also available in Settings; future deletions still require confirmation.
+- Overflowing pages, lists and long text show a persistent proportional scrollbar, with fixed actions kept visible.
 - Settings shows the identified board and supported radio channels: ESP32-S3 supports 2.4 GHz
   channel 6; ESP32-C5 also supports 5 GHz channels 44 and 149. CLI commands are `radio status`
   and `radio set`; see the [development guide](docs/DEVELOPMENT.md#cli-and-radio-diagnostics).

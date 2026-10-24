@@ -15,7 +15,8 @@ use std::{
 };
 pub use transfer_history::{
     TransferDirection, TransferFailureReason, TransferHistoryRecord, TransferOutcome,
-    append_transfer_history, clear_transfer_history, load_transfer_history,
+    append_transfer_history, clear_transfer_history, delete_transfer_history,
+    load_transfer_history,
 };
 
 pub const MAX_NAME_CHARS: usize = 64;
@@ -123,6 +124,32 @@ pub fn save_language_to(path: &Path, language: &str) -> Result<String> {
     settings.insert("language".into(), Value::String(language.clone()));
     write_settings(path, &settings)?;
     Ok(language)
+}
+
+/// Whether the history deletion confirmation initially selects deleting files as well.
+/// Loading this preference never creates a settings file or user-data directory.
+pub fn load_history_delete_files() -> Result<bool> {
+    load_history_delete_files_from(&settings_path()?)
+}
+
+pub fn load_history_delete_files_from(path: &Path) -> Result<bool> {
+    match read_settings(path)?.get("history_delete_files") {
+        None => Ok(false),
+        Some(Value::Bool(delete_files)) => Ok(*delete_files),
+        _ => bail!("历史记录删除设置格式不正确"),
+    }
+}
+
+pub fn save_history_delete_files(delete_files: bool) -> Result<bool> {
+    save_history_delete_files_to(&settings_path()?, delete_files)
+}
+
+pub fn save_history_delete_files_to(path: &Path, delete_files: bool) -> Result<bool> {
+    let _guard = FileGuard::acquire(&path.with_extension("lock"))?;
+    let mut settings = read_settings(path)?;
+    settings.insert("history_delete_files".into(), Value::Bool(delete_files));
+    write_settings(path, &settings)?;
+    Ok(delete_files)
 }
 
 fn normalize_language(language: &str) -> Result<String> {
@@ -450,6 +477,35 @@ mod tests {
             assert_eq!(error.downcast_ref::<NameError>(), Some(&kind));
         }
     }
+    #[test]
+    fn history_delete_preference_defaults_to_false_and_preserves_other_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("not-created").join("desktop.json");
+        assert!(!load_history_delete_files_from(&path).unwrap());
+        assert!(!path.parent().unwrap().exists());
+        assert!(save_history_delete_files_to(&path, true).unwrap());
+        save_name_to(&path, "PC").unwrap();
+        save_language_to(&path, "zh-CN").unwrap();
+        assert!(load_history_delete_files_from(&path).unwrap());
+        assert!(!save_history_delete_files_to(&path, false).unwrap());
+        assert!(!load_history_delete_files_from(&path).unwrap());
+        assert_eq!(load_name_from(&path, "fallback").unwrap(), "PC");
+        assert_eq!(load_language_from(&path).unwrap().as_deref(), Some("zh-CN"));
+        fs::write(&path, br#"{"future":{"x":1}}"#).unwrap();
+        save_history_delete_files_to(&path, true).unwrap();
+        assert_eq!(read_settings(&path).unwrap()["future"]["x"], 1);
+        for invalid in [
+            br#"{"history_delete_files":"true"}"#.as_slice(),
+            br#"{"history_delete_files":null}"#,
+        ] {
+            fs::write(&path, invalid).unwrap();
+            assert!(load_history_delete_files_from(&path).is_err());
+        }
+        fs::write(&path, b"invalid JSON").unwrap();
+        assert!(save_history_delete_files_to(&path, false).is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"invalid JSON");
+    }
+
     #[test]
     fn language_preference_preserves_other_settings_and_rejects_invalid_values() {
         let dir = tempfile::tempdir().unwrap();
