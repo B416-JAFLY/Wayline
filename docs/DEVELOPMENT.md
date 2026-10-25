@@ -146,7 +146,9 @@ The default image uses UART0 behind the board's USB-UART bridge at 3 Mbaud; outp
 Serial/JTAG controller to the host; that image is written to `firmware/build-rust-esp32c5-usb/`.
 Component management stays disabled so the ESP32-S3 `firmware/dependencies.lock` is unchanged.
 Headless S3 profiles reuse the 8 MiB Cardputer-compatible partition layout but omit M5Unified
-and the Cardputer UI; 4 MiB S3 boards do not match these profiles. S3 and C5 UART0 and Native USB
+and the Cardputer UI. Both 8 MiB and 16 MiB S3 boards use the 8 MiB image and partition layout;
+extra Flash capacity is unused, and 4 MiB boards are rejected. Image headers must match the
+manifest capacity. S3 and C5 UART0 and Native USB
 profiles can be packaged for Desktop and selected in its firmware page. Build records bind each
 profile to its target and sdkconfig hash. For direct ESP-IDF
 flashing, use the matching build directory:
@@ -200,6 +202,12 @@ locale has the same keys and placeholders and generates the static copy table at
 Adding a language requires a TOML file, a `Language` enum variant and an entry in the build list;
 keep every translation complete. Low-level diagnostics from shared modules (transfer, flashing and
 local settings validation) remain in their source wording. Full receive errors go to `desktop-receiver.log`.
+
+`pinned` defaults to `false` and keeps the sharing card open on deactivation when enabled.
+`drag_activate` and `auto_open_download_dir` default to `true`; they control revealing the
+drop target during dragging and opening the first received item's location after confirmation.
+Missing or null values use defaults; other non-boolean values report errors. Read failures
+are shown on the card, and failed saves leave the previous in-memory value unchanged.
 
 Active send and receive cards show a smoothed speed from progress events; it returns to zero
 after one second without progress. Elapsed time starts at the first `Uploading` or `Receiving`
