@@ -264,6 +264,33 @@ pub fn save_notification_duration_seconds_to(path: &Path, seconds: u64) -> Resul
     Ok(seconds)
 }
 
+pub const DEFAULT_DRAG_ACTIVATE: bool = true;
+
+/// Whether dragging files should automatically reveal the sharing capsule.
+pub fn load_drag_activate() -> Result<bool> {
+    load_drag_activate_from(&settings_path()?)
+}
+
+pub fn load_drag_activate_from(path: &Path) -> Result<bool> {
+    match read_settings(path)?.get("drag_activate") {
+        None | Some(Value::Null) => Ok(DEFAULT_DRAG_ACTIVATE),
+        Some(Value::Bool(enabled)) => Ok(*enabled),
+        _ => Ok(DEFAULT_DRAG_ACTIVATE),
+    }
+}
+
+pub fn save_drag_activate(enabled: bool) -> Result<bool> {
+    save_drag_activate_to(&settings_path()?, enabled)
+}
+
+pub fn save_drag_activate_to(path: &Path, enabled: bool) -> Result<bool> {
+    let _guard = FileGuard::acquire(&path.with_extension("lock"))?;
+    let mut settings = read_settings(path)?;
+    settings.insert("drag_activate".into(), Value::Bool(enabled));
+    write_settings(path, &settings)?;
+    Ok(enabled)
+}
+
 pub const DEFAULT_AUTO_OPEN_DOWNLOAD_DIR: bool = true;
 
 /// Whether receiving files successfully should automatically open the containing folder.

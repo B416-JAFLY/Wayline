@@ -998,37 +998,26 @@ fn monitor_file_drag(tx: Sender<Action>, stop: Arc<AtomicBool>) {
 
 fn explorer_file_drag() -> bool {
     unsafe {
-        let source = GetForegroundWindow();
-        let mut class = [0u16; 64];
-        let len = GetClassNameW(source, &mut class) as usize;
-        let class = String::from_utf16_lossy(&class[..len]);
-        if !matches!(
-            class.as_str(),
-            "CabinetWClass" | "ExploreWClass" | "Progman" | "WorkerW"
-        ) {
-            return false;
+        if let Ok(hwnd) = FindWindowW(w!("SysDragImage"), None) {
+            if hwnd.0 != std::ptr::null_mut() && IsWindowVisible(hwnd).as_bool() {
+                return true;
+            }
         }
-        let mut source_pid = 0;
-        GetWindowThreadProcessId(source, Some(&mut source_pid));
-        let mut data = (source_pid, false);
-        let _ = EnumWindows(Some(find_drag_image), LPARAM(&mut data as *mut _ as isize));
-        data.1
+        let mut found = false;
+        let _ = EnumWindows(Some(find_drag_image), LPARAM(&mut found as *mut _ as isize));
+        found
     }
 }
 
 unsafe extern "system" fn find_drag_image(hwnd: HWND, lp: LPARAM) -> windows::core::BOOL {
     unsafe {
-        let data = &mut *(lp.0 as *mut (u32, bool));
+        let found = &mut *(lp.0 as *mut bool);
         if IsWindowVisible(hwnd).as_bool() {
             let mut class = [0u16; 64];
             let len = GetClassNameW(hwnd, &mut class) as usize;
-            if String::from_utf16_lossy(&class[..len]) == "SysDragImage" {
-                let mut pid = 0;
-                GetWindowThreadProcessId(hwnd, Some(&mut pid));
-                if pid == data.0 {
-                    data.1 = true;
-                    return false.into();
-                }
+            if len > 0 && String::from_utf16_lossy(&class[..len]) == "SysDragImage" {
+                *found = true;
+                return false.into();
             }
         }
         true.into()

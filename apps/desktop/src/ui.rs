@@ -87,6 +87,8 @@ pub struct Capsule {
     pinned: bool,
     last_deactivate_at: Option<Instant>,
     auto_open_download_dir: bool,
+    drag_activate: bool,
+    drag_active: bool,
 }
 
 impl Capsule {
@@ -101,6 +103,7 @@ impl Capsule {
         let text = language.strings();
         let auto_open_download_dir = crate::settings::load_auto_open_download_dir().unwrap_or(crate::settings::DEFAULT_AUTO_OPEN_DOWNLOAD_DIR);
         let pinned = crate::settings::load_pinned().unwrap_or(crate::settings::DEFAULT_PINNED);
+        let drag_activate = crate::settings::load_drag_activate().unwrap_or(crate::settings::DEFAULT_DRAG_ACTIVATE);
         let (device_name, mut settings_error) = match crate::settings::load() {
             Ok(name) => (name, None),
             Err(error) => (
@@ -245,6 +248,8 @@ impl Capsule {
             pinned,
             last_deactivate_at: None,
             auto_open_download_dir,
+            drag_activate,
+            drag_active: false,
         }
     }
 
@@ -636,6 +641,8 @@ impl Capsule {
                         && !self.picker_open
                         && self.incoming.is_none()
                         && !self.firmware.busy
+                        && !self.drag_active
+                        && !self.drop_hovered
                         && self.visibility == Visibility::Share
                     {
                         self.last_deactivate_at = Some(Instant::now());
@@ -713,7 +720,10 @@ impl Capsule {
                     changed = true;
                 }
                 Action::FileDrag(active) => {
-                    if !self.model.phase.busy() && !self.picker_open && self.name_input.is_none()
+                    self.drag_active = active;
+                    if !self.drag_activate && active {
+                        // Drag activation disabled in settings
+                    } else if !self.model.phase.busy() && !self.picker_open && self.name_input.is_none()
                         || !active
                     {
                         self.visibility.file_drag(active);
@@ -873,6 +883,12 @@ impl Capsule {
     fn toggle_pinned(&mut self, cx: &mut Context<Self>) {
         self.pinned = !self.pinned;
         let _ = crate::settings::save_pinned(self.pinned);
+        cx.notify();
+    }
+
+    fn toggle_drag_activate(&mut self, cx: &mut Context<Self>) {
+        self.drag_activate = !self.drag_activate;
+        let _ = crate::settings::save_drag_activate(self.drag_activate);
         cx.notify();
     }
 
@@ -1147,6 +1163,7 @@ impl Capsule {
         if paths.is_empty() {
             return;
         }
+        self.drag_active = false;
         self.expand(true, window, cx);
         if self.firmware.busy || self.model.phase.busy() {
             self.model.error = Some(self.language.strings().busy_device_add_files.into());
@@ -1355,7 +1372,7 @@ impl Capsule {
         }
     }
 
-    fn pill(&self) -> AnyElement {
+    fn pill(&self, cx: &mut Context<Self>) -> AnyElement {
         let text = self.language.strings();
         let subtitle = if self.model.phase.busy() {
             self.model.phase.title(self.language)
@@ -1376,6 +1393,8 @@ impl Capsule {
             .items_center()
             .px(px(16.))
             .gap(px(12.))
+            .cursor_pointer()
+            .on_click(cx.listener(|this, _, window, cx| this.expand(true, window, cx)))
             .when(self.drop_hovered, |pill| {
                 pill.bg(rgb(0x163353)).border_color(rgb(BLUE))
             })
@@ -3046,6 +3065,16 @@ impl Capsule {
                                 !this.desktop_notifications_enabled,
                                 cx,
                             )
+                        })),
+                    )
+                    .child(
+                        checkbox(
+                            "drag-activate-enabled",
+                            text.drag_activate,
+                            self.drag_activate,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.toggle_drag_activate(cx);
                         })),
                     )
                     .child(div().text_size(px(13.)).child(text.notice_position_title))
@@ -4824,7 +4853,7 @@ impl Render for Capsule {
             } else if self.visibility == Visibility::Share {
                 self.panel(cx)
             } else {
-                self.pill()
+                self.pill(cx)
             })
     }
 }
