@@ -478,25 +478,31 @@ impl Shell {
                         use windows::Win32::System::Com::{
                             COINIT_APARTMENTTHREADED, CoInitializeEx, CoTaskMemFree, CoUninitialize,
                         };
-                        // SAFETY: this dedicated worker owns its COM apartment. The terminated
-                        // path lives through parsing, and the shell PIDL is freed after selection.
-                        unsafe {
-                            CoInitializeEx(None, COINIT_APARTMENTTHREADED)
-                                .ok()
-                                .context("无法初始化文件位置浏览")?;
-                            let mut item = std::ptr::null_mut();
-                            let name: Vec<u16> =
-                                path.as_os_str().encode_wide().chain(Some(0)).collect();
-                            let result =
-                                SHParseDisplayName(PCWSTR(name.as_ptr()), None, &mut item, 0, None)
-                                    .and_then(|()| SHOpenFolderAndSelectItems(item, None, 0));
-                            CoTaskMemFree(Some(item.cast()));
-                            CoUninitialize();
-                            result.context("无法在资源管理器中显示文件")?;
+                        let select_result = unsafe {
+                            if CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok() {
+                                let mut item = std::ptr::null_mut();
+                                let name: Vec<u16> =
+                                    path.as_os_str().encode_wide().chain(Some(0)).collect();
+                                let res =
+                                    SHParseDisplayName(PCWSTR(name.as_ptr()), None, &mut item, 0, None)
+                                        .and_then(|()| SHOpenFolderAndSelectItems(item, None, 0));
+                                CoTaskMemFree(Some(item.cast()));
+                                CoUninitialize();
+                                res
+                            } else {
+                                Err(windows::core::Error::empty())
+                            }
+                        };
+                        if select_result.is_ok() {
+                            return Ok(());
                         }
-                        return Ok(());
                     }
-                    let folder: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+                    let folder_path = if metadata.is_file() {
+                        path.parent().unwrap_or(&path)
+                    } else {
+                        &path
+                    };
+                    let folder: Vec<u16> = folder_path.as_os_str().encode_wide().chain(Some(0)).collect();
                     let mut info = SHELLEXECUTEINFOW {
                         cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
                         fMask: SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI,

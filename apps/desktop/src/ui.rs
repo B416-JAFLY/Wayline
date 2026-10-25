@@ -86,6 +86,7 @@ pub struct Capsule {
     queued_at: Option<Instant>,
     pinned: bool,
     last_deactivate_at: Option<Instant>,
+    auto_open_download_dir: bool,
 }
 
 impl Capsule {
@@ -98,6 +99,7 @@ impl Capsule {
         };
         i18n::set_current(language);
         let text = language.strings();
+        let auto_open_download_dir = crate::settings::load_auto_open_download_dir().unwrap_or(crate::settings::DEFAULT_AUTO_OPEN_DOWNLOAD_DIR);
         let pinned = crate::settings::load_pinned().unwrap_or(crate::settings::DEFAULT_PINNED);
         let (device_name, mut settings_error) = match crate::settings::load() {
             Ok(name) => (name, None),
@@ -242,6 +244,7 @@ impl Capsule {
             queued_at: None,
             pinned,
             last_deactivate_at: None,
+            auto_open_download_dir,
         }
     }
 
@@ -310,7 +313,7 @@ impl Capsule {
                             && let Some(record) = record
                             && let Some(worker) = &self.history_worker
                         {
-                            worker.append(record, received_files);
+                            worker.append(record, received_files.clone());
                         }
                     }
                     Event::HistoryUpdated(Err(error)) => {
@@ -551,17 +554,27 @@ impl Capsule {
                         && let Some(record) = record
                         && let Some(worker) = &self.history_worker
                     {
-                        worker.append(record, received_files);
+                        worker.append(record, received_files.clone());
                     }
                     if applied
                         && matches!(event, wayline_core::ReceiverEvent::Received { .. })
-                        && let Some(notice) = &self.receive.notice
                     {
-                        self.show_desktop_notification(
-                            notice.message.clone(),
-                            notice.full_text.clone(),
-                            cx,
-                        );
+                        if let Some(notice) = &self.receive.notice {
+                            self.show_desktop_notification(
+                                notice.message.clone(),
+                                notice.full_text.clone(),
+                                cx,
+                            );
+                        }
+                        if self.auto_open_download_dir {
+                            if let Some(target) = received_files
+                                .first()
+                                .cloned()
+                                .or_else(|| self.download_directory.clone())
+                            {
+                                self.open_history_folder(target, cx);
+                            }
+                        }
                     }
                     changed |= applied;
                     continue;
@@ -851,6 +864,12 @@ impl Capsule {
             );
         }
     }
+    fn toggle_auto_open_download_dir(&mut self, cx: &mut Context<Self>) {
+        self.auto_open_download_dir = !self.auto_open_download_dir;
+        let _ = crate::settings::save_auto_open_download_dir(self.auto_open_download_dir);
+        cx.notify();
+    }
+
     fn toggle_pinned(&mut self, cx: &mut Context<Self>) {
         self.pinned = !self.pinned;
         let _ = crate::settings::save_pinned(self.pinned);
@@ -3280,6 +3299,16 @@ impl Capsule {
                             button.opacity(0.4)
                         })
                         .on_click(cx.listener(|this, _, _, cx| this.choose_download_directory(cx))),
+                    )
+                    .child(
+                        checkbox(
+                            "auto-open-download-dir",
+                            text.auto_open_download_dir,
+                            self.auto_open_download_dir,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.toggle_auto_open_download_dir(cx);
+                        })),
                     )
                     .when(self.receive.active.is_some(), |card| {
                         card.child(

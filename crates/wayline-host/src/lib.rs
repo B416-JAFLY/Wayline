@@ -264,6 +264,33 @@ pub fn save_notification_duration_seconds_to(path: &Path, seconds: u64) -> Resul
     Ok(seconds)
 }
 
+pub const DEFAULT_AUTO_OPEN_DOWNLOAD_DIR: bool = true;
+
+/// Whether receiving files successfully should automatically open the containing folder.
+pub fn load_auto_open_download_dir() -> Result<bool> {
+    load_auto_open_download_dir_from(&settings_path()?)
+}
+
+pub fn load_auto_open_download_dir_from(path: &Path) -> Result<bool> {
+    match read_settings(path)?.get("auto_open_download_dir") {
+        None | Some(Value::Null) => Ok(DEFAULT_AUTO_OPEN_DOWNLOAD_DIR),
+        Some(Value::Bool(enabled)) => Ok(*enabled),
+        _ => Ok(DEFAULT_AUTO_OPEN_DOWNLOAD_DIR),
+    }
+}
+
+pub fn save_auto_open_download_dir(enabled: bool) -> Result<bool> {
+    save_auto_open_download_dir_to(&settings_path()?, enabled)
+}
+
+pub fn save_auto_open_download_dir_to(path: &Path, enabled: bool) -> Result<bool> {
+    let _guard = FileGuard::acquire(&path.with_extension("lock"))?;
+    let mut settings = read_settings(path)?;
+    settings.insert("auto_open_download_dir".into(), Value::Bool(enabled));
+    write_settings(path, &settings)?;
+    Ok(enabled)
+}
+
 pub const DEFAULT_PINNED: bool = false;
 
 /// Whether the main window should remain visible when losing focus.
