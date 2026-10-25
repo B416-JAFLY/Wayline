@@ -101,9 +101,6 @@ impl Capsule {
         };
         i18n::set_current(language);
         let text = language.strings();
-        let auto_open_download_dir = crate::settings::load_auto_open_download_dir().unwrap_or(crate::settings::DEFAULT_AUTO_OPEN_DOWNLOAD_DIR);
-        let pinned = crate::settings::load_pinned().unwrap_or(crate::settings::DEFAULT_PINNED);
-        let drag_activate = crate::settings::load_drag_activate().unwrap_or(crate::settings::DEFAULT_DRAG_ACTIVATE);
         let (device_name, mut settings_error) = match crate::settings::load() {
             Ok(name) => (name, None),
             Err(error) => (
@@ -156,6 +153,33 @@ impl Capsule {
                 None
             }
         };
+        let mut load_preference = |result: anyhow::Result<bool>, default, label| {
+            result.unwrap_or_else(|error| {
+                let message = format!("{}{label}: {error:#}", text.err_behavior_setting_load);
+                if let Some(previous) = &mut settings_error {
+                    previous.push('\n');
+                    previous.push_str(&message);
+                } else {
+                    settings_error = Some(message);
+                }
+                default
+            })
+        };
+        let auto_open_download_dir = load_preference(
+            crate::settings::load_auto_open_download_dir(),
+            crate::settings::DEFAULT_AUTO_OPEN_DOWNLOAD_DIR,
+            text.auto_open_download_dir,
+        );
+        let pinned = load_preference(
+            crate::settings::load_pinned(),
+            crate::settings::DEFAULT_PINNED,
+            text.pin_window,
+        );
+        let drag_activate = load_preference(
+            crate::settings::load_drag_activate(),
+            crate::settings::DEFAULT_DRAG_ACTIVATE,
+            text.drag_activate,
+        );
         let (tx, rx) = mpsc::channel();
         let (history_worker, history_thread) = crate::history::StoreWorker::start(tx.clone());
         let (action_tx, actions) = mpsc::channel();
@@ -555,31 +579,30 @@ impl Capsule {
                         _ => Vec::new(),
                     };
                     let applied = self.receive.apply_at(&event, event_at, event_unix_ms);
+                    let open_location = crate::receiving::auto_open_location(
+                        &event,
+                        applied,
+                        self.auto_open_download_dir,
+                        self.download_directory.as_deref(),
+                    );
                     if applied
                         && let Some(record) = record
                         && let Some(worker) = &self.history_worker
                     {
-                        worker.append(record, received_files.clone());
+                        worker.append(record, received_files);
                     }
                     if applied
                         && matches!(event, wayline_core::ReceiverEvent::Received { .. })
+                        && let Some(notice) = &self.receive.notice
                     {
-                        if let Some(notice) = &self.receive.notice {
-                            self.show_desktop_notification(
-                                notice.message.clone(),
-                                notice.full_text.clone(),
-                                cx,
-                            );
-                        }
-                        if self.auto_open_download_dir {
-                            if let Some(target) = received_files
-                                .first()
-                                .cloned()
-                                .or_else(|| self.download_directory.clone())
-                            {
-                                self.open_history_folder(target, cx);
-                            }
-                        }
+                        self.show_desktop_notification(
+                            notice.message.clone(),
+                            notice.full_text.clone(),
+                            cx,
+                        );
+                    }
+                    if let Some(target) = open_location {
+                        self.open_history_folder(target, cx);
                     }
                     changed |= applied;
                     continue;
@@ -637,14 +660,12 @@ impl Capsule {
                 Action::Show => self.expand(true, window, cx),
                 Action::Close => self.expand(false, window, cx),
                 Action::Deactivate => {
-                    if !self.pinned
-                        && !self.picker_open
-                        && self.incoming.is_none()
-                        && !self.firmware.busy
-                        && !self.drag_active
-                        && !self.drop_hovered
-                        && self.visibility == Visibility::Share
-                    {
+                    let interacting = self.picker_open
+                        || self.incoming.is_some()
+                        || self.firmware.busy
+                        || self.drag_active
+                        || self.drop_hovered;
+                    if self.visibility.hide_on_deactivate(self.pinned, interacting) {
                         self.last_deactivate_at = Some(Instant::now());
                         self.expand(false, window, cx);
                     }
@@ -721,12 +742,10 @@ impl Capsule {
                 }
                 Action::FileDrag(active) => {
                     self.drag_active = active;
-                    if !self.drag_activate && active {
-                        // Drag activation disabled in settings
-                    } else if !self.model.phase.busy() && !self.picker_open && self.name_input.is_none()
+                    if !self.model.phase.busy() && !self.picker_open && self.name_input.is_none()
                         || !active
                     {
-                        self.visibility.file_drag(active);
+                        self.visibility.file_drag(active, self.drag_activate);
                         self.place();
                         changed = true;
                     }
@@ -875,20 +894,42 @@ impl Capsule {
         }
     }
     fn toggle_auto_open_download_dir(&mut self, cx: &mut Context<Self>) {
-        self.auto_open_download_dir = !self.auto_open_download_dir;
-        let _ = crate::settings::save_auto_open_download_dir(self.auto_open_download_dir);
+        let result = crate::settings::toggle(
+            &mut self.auto_open_download_dir,
+            crate::settings::save_auto_open_download_dir,
+        );
+        let text = self.language.strings();
+        self.settings_error = result.err().map(|error| {
+            format!(
+                "{}{}: {error:#}",
+                text.err_behavior_setting_save, text.auto_open_download_dir
+            )
+        });
         cx.notify();
     }
 
     fn toggle_pinned(&mut self, cx: &mut Context<Self>) {
-        self.pinned = !self.pinned;
-        let _ = crate::settings::save_pinned(self.pinned);
+        let result = crate::settings::toggle(&mut self.pinned, crate::settings::save_pinned);
+        let text = self.language.strings();
+        self.settings_error = result.err().map(|error| {
+            format!(
+                "{}{}: {error:#}",
+                text.err_behavior_setting_save, text.pin_window
+            )
+        });
         cx.notify();
     }
 
     fn toggle_drag_activate(&mut self, cx: &mut Context<Self>) {
-        self.drag_activate = !self.drag_activate;
-        let _ = crate::settings::save_drag_activate(self.drag_activate);
+        let result =
+            crate::settings::toggle(&mut self.drag_activate, crate::settings::save_drag_activate);
+        let text = self.language.strings();
+        self.settings_error = result.err().map(|error| {
+            format!(
+                "{}{}: {error:#}",
+                text.err_behavior_setting_save, text.drag_activate
+            )
+        });
         cx.notify();
     }
 
@@ -1676,6 +1717,11 @@ impl Capsule {
                                     })),
                             ),
                     ),
+            )
+            .children(
+                self.settings_error
+                    .as_ref()
+                    .map(|error| self.error_view(error)),
             )
             .child(
                 div()
@@ -3274,11 +3320,6 @@ impl Capsule {
                     },
                 ))
             })
-            .children(
-                self.settings_error
-                    .as_ref()
-                    .map(|error| self.error_view(error)),
-            )
             .child(
                 div()
                     .flex_shrink_0()

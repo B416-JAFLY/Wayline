@@ -20,12 +20,20 @@ pub enum Visibility {
     Share,
 }
 impl Visibility {
-    pub fn file_drag(&mut self, active: bool) {
+    pub fn file_drag(&mut self, active: bool, enabled: bool) {
         match (*self, active) {
-            (Self::Hidden, true) => *self = Self::DropTarget,
+            (Self::Hidden, true) if enabled => *self = Self::DropTarget,
             (Self::DropTarget, false) => *self = Self::Hidden,
             _ => {}
         }
+    }
+
+    pub fn hide_on_deactivate(&mut self, pinned: bool, interacting: bool) -> bool {
+        if *self != Self::Share || pinned || interacting {
+            return false;
+        }
+        *self = Self::Hidden;
+        true
     }
 }
 
@@ -1071,15 +1079,33 @@ mod tests {
     fn capsule_is_visible_only_during_drag_and_does_not_close_sharing() {
         let mut visibility = Visibility::default();
         assert_eq!(visibility, Visibility::Hidden);
-        visibility.file_drag(true);
+        visibility.file_drag(true, false);
+        assert_eq!(visibility, Visibility::Hidden);
+        visibility.file_drag(true, true);
         assert_eq!(visibility, Visibility::DropTarget);
-        visibility.file_drag(false);
+        visibility.file_drag(false, false); // Cancelling still hides an existing drop target.
         assert_eq!(visibility, Visibility::Hidden);
         visibility = Visibility::Share;
-        visibility.file_drag(false);
+        visibility.file_drag(false, true);
         assert_eq!(visibility, Visibility::Share);
         visibility = Visibility::Hidden; // Close/Escape must not leave a pill.
-        visibility.file_drag(false);
+        visibility.file_drag(false, true);
+        assert_eq!(visibility, Visibility::Hidden);
+    }
+    #[test]
+    fn pinning_and_interactions_protect_the_sharing_card_on_deactivation() {
+        let mut visibility = Visibility::Share;
+        assert!(!visibility.hide_on_deactivate(true, false));
+        assert_eq!(visibility, Visibility::Share);
+        assert!(!visibility.hide_on_deactivate(false, true));
+        assert_eq!(visibility, Visibility::Share);
+        assert!(visibility.hide_on_deactivate(false, false));
+        assert_eq!(visibility, Visibility::Hidden);
+        assert!(!visibility.hide_on_deactivate(false, false));
+        visibility.file_drag(true, true);
+        assert!(!visibility.hide_on_deactivate(false, false));
+        assert_eq!(visibility, Visibility::DropTarget);
+        visibility.file_drag(false, true);
         assert_eq!(visibility, Visibility::Hidden);
     }
     #[test]

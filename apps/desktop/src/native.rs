@@ -478,14 +478,21 @@ impl Shell {
                         use windows::Win32::System::Com::{
                             COINIT_APARTMENTTHREADED, CoInitializeEx, CoTaskMemFree, CoUninitialize,
                         };
+                        // SAFETY: this worker owns the COM apartment; the UTF-16
+                        // path outlives parsing and the returned PIDL is freed here.
                         let select_result = unsafe {
                             if CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok() {
                                 let mut item = std::ptr::null_mut();
                                 let name: Vec<u16> =
                                     path.as_os_str().encode_wide().chain(Some(0)).collect();
-                                let res =
-                                    SHParseDisplayName(PCWSTR(name.as_ptr()), None, &mut item, 0, None)
-                                        .and_then(|()| SHOpenFolderAndSelectItems(item, None, 0));
+                                let res = SHParseDisplayName(
+                                    PCWSTR(name.as_ptr()),
+                                    None,
+                                    &mut item,
+                                    0,
+                                    None,
+                                )
+                                .and_then(|()| SHOpenFolderAndSelectItems(item, None, 0));
                                 CoTaskMemFree(Some(item.cast()));
                                 CoUninitialize();
                                 res
@@ -502,7 +509,11 @@ impl Shell {
                     } else {
                         &path
                     };
-                    let folder: Vec<u16> = folder_path.as_os_str().encode_wide().chain(Some(0)).collect();
+                    let folder: Vec<u16> = folder_path
+                        .as_os_str()
+                        .encode_wide()
+                        .chain(Some(0))
+                        .collect();
                     let mut info = SHELLEXECUTEINFOW {
                         cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
                         fMask: SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI,
@@ -895,10 +906,11 @@ unsafe extern "system" fn subclass(
         }
         return LRESULT(0);
     }
-    if message == WM_ACTIVATE && (wp.0 & 0xffff) == 0 {
-        if let Some(tx) = ACTIONS.get() {
-            let _ = tx.send(Action::Deactivate);
-        }
+    if message == WM_ACTIVATE
+        && (wp.0 & 0xffff) == 0
+        && let Some(tx) = ACTIONS.get()
+    {
+        let _ = tx.send(Action::Deactivate);
     }
     let action = match message {
         SHOW_MESSAGE => Some(Action::Show),
@@ -998,10 +1010,11 @@ fn monitor_file_drag(tx: Sender<Action>, stop: Arc<AtomicBool>) {
 
 fn explorer_file_drag() -> bool {
     unsafe {
-        if let Ok(hwnd) = FindWindowW(w!("SysDragImage"), None) {
-            if hwnd.0 != std::ptr::null_mut() && IsWindowVisible(hwnd).as_bool() {
-                return true;
-            }
+        if let Ok(hwnd) = FindWindowW(w!("SysDragImage"), None)
+            && !hwnd.0.is_null()
+            && IsWindowVisible(hwnd).as_bool()
+        {
+            return true;
         }
         let mut found = false;
         let _ = EnumWindows(Some(find_drag_image), LPARAM(&mut found as *mut _ as isize));

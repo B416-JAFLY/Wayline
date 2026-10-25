@@ -8,7 +8,8 @@ use windows::Win32::{
 
 pub const CORNER_RADIUS: f32 = 28.;
 const DRAG_HEADER_HEIGHT: f32 = 56.;
-const DRAG_CONTROL_RESERVE: f32 = 156.;
+// Five 28px controls, four 8px gaps, plus the panel's right padding/border.
+const DRAG_CONTROL_RESERVE: f32 = 196.;
 
 #[allow(dead_code)] // Shared with preview builds that only use the corner hit-test.
 fn is_draggable_header(x: f32, y: f32, width: f32, scale: f32) -> bool {
@@ -107,7 +108,7 @@ pub fn transparent_corner(hwnd: HWND, location: LPARAM) -> bool {
 }
 
 /// Returns true for the non-interactive portion of the custom header.
-/// The right side is reserved for the firmware, history, settings and close controls.
+/// The right side is reserved for the firmware, history, settings, pin and close controls.
 #[allow(dead_code)] // This module is also compiled into borderless preview examples.
 pub fn draggable_header(hwnd: HWND, location: LPARAM) -> bool {
     let mut point = POINT {
@@ -169,6 +170,30 @@ mod tests {
                 assert!(hit(0., 28.));
                 assert!(hit(width / 2., height / 2.));
                 assert!(!hit(-1., height / 2.));
+            }
+        }
+    }
+
+    #[test]
+    fn header_drag_does_not_intercept_sharing_controls() {
+        // The sharing header has five 28px controls with 8px gaps, inside
+        // the panel's 22px padding and 1px border. Check each button's full width.
+        for scale in [1., 1.25, 1.5, 2., 2.5, 3.] {
+            for (control, left) in [
+                ("firmware", 161.),
+                ("history", 197.),
+                ("settings", 233.),
+                ("pin", 269.),
+                ("close", 305.),
+            ] {
+                for x in [left, left + 14., left + 27.] {
+                    for y in [23., 37., 50.] {
+                        assert!(
+                            !is_draggable_header(x * scale, y * scale, 356. * scale, scale),
+                            "{control} at ({x}, {y}) must receive clicks at scale {scale}"
+                        );
+                    }
+                }
             }
         }
     }

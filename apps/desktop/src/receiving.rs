@@ -37,6 +37,25 @@ pub fn save_directory() -> Result<PathBuf> {
     wayline_host::download_dir()
 }
 
+/// Only a successful event accepted by the receive model may open Explorer.
+pub fn auto_open_location(
+    event: &ReceiverEvent,
+    applied: bool,
+    enabled: bool,
+    fallback: Option<&std::path::Path>,
+) -> Option<PathBuf> {
+    if !applied || !enabled {
+        return None;
+    }
+    match event {
+        ReceiverEvent::Received { files, .. } => files
+            .first()
+            .cloned()
+            .or_else(|| fallback.map(std::path::Path::to_path_buf)),
+        _ => None,
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Phase {
     Waiting,
@@ -869,6 +888,64 @@ mod tests {
             icon: None,
             sender_record_data: None,
         }
+    }
+
+    #[test]
+    fn auto_open_requires_matching_completion_and_respects_the_preference() {
+        let directory = PathBuf::from("chosen folder");
+        let mut model = Model::default();
+        model.begin(&transfer("current"), directory.clone());
+        for event in [
+            ReceiverEvent::Receiving {
+                transfer_id: "current".into(),
+                received: 100,
+                total: Some(100),
+            },
+            ReceiverEvent::Confirming {
+                transfer_id: "current".into(),
+            },
+            ReceiverEvent::Received {
+                transfer: transfer("stale"),
+                files: vec![directory.join("stale.txt")],
+            },
+        ] {
+            let applied = model.apply(&event);
+            assert!(auto_open_location(&event, applied, true, Some(&directory)).is_none());
+        }
+        let event = ReceiverEvent::Received {
+            transfer: transfer("current"),
+            files: vec![directory.join("photo.jpg"), directory.join("other.txt")],
+        };
+        let applied = model.apply(&event);
+        assert!(applied);
+        assert!(auto_open_location(&event, applied, false, Some(&directory)).is_none());
+        assert_eq!(
+            auto_open_location(&event, applied, true, Some(&directory)),
+            Some(directory.join("photo.jpg"))
+        );
+        assert!(auto_open_location(&event, model.apply(&event), true, Some(&directory)).is_none());
+
+        model.begin(&transfer("empty"), directory.clone());
+        let empty = ReceiverEvent::Received {
+            transfer: transfer("empty"),
+            files: vec![],
+        };
+        let applied = model.apply(&empty);
+        assert_eq!(
+            auto_open_location(&empty, applied, true, Some(&directory)),
+            Some(directory.clone())
+        );
+        assert!(auto_open_location(&empty, applied, true, None).is_none());
+
+        model.begin(&transfer("failed"), directory.clone());
+        let failed = ReceiverEvent::TransferFailed {
+            transfer_id: "failed".into(),
+            error: "cancelled".into(),
+            kind: wayline_core::TransferFailureKind::Cancelled,
+        };
+        assert!(
+            auto_open_location(&failed, model.apply(&failed), true, Some(&directory)).is_none()
+        );
     }
 
     #[test]
