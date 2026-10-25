@@ -84,6 +84,8 @@ pub struct Capsule {
     opening_files: Option<u64>,
     queued_files: Vec<PathBuf>,
     queued_at: Option<Instant>,
+    pinned: bool,
+    last_deactivate_at: Option<Instant>,
 }
 
 impl Capsule {
@@ -96,6 +98,7 @@ impl Capsule {
         };
         i18n::set_current(language);
         let text = language.strings();
+        let pinned = crate::settings::load_pinned().unwrap_or(crate::settings::DEFAULT_PINNED);
         let (device_name, mut settings_error) = match crate::settings::load() {
             Ok(name) => (name, None),
             Err(error) => (
@@ -237,6 +240,8 @@ impl Capsule {
             opening_files: None,
             queued_files: Vec::new(),
             queued_at: None,
+            pinned,
+            last_deactivate_at: None,
         }
     }
 
@@ -602,9 +607,28 @@ impl Capsule {
         }
         for action in actions {
             match action {
-                Action::Toggle => self.expand(self.visibility != Visibility::Share, window, cx),
+                Action::Toggle => {
+                    let just_deactivated = self
+                        .last_deactivate_at
+                        .take()
+                        .is_some_and(|at| at.elapsed() < Duration::from_millis(350));
+                    if !just_deactivated {
+                        self.expand(self.visibility != Visibility::Share, window, cx);
+                    }
+                }
                 Action::Show => self.expand(true, window, cx),
                 Action::Close => self.expand(false, window, cx),
+                Action::Deactivate => {
+                    if !self.pinned
+                        && !self.picker_open
+                        && self.incoming.is_none()
+                        && !self.firmware.busy
+                        && self.visibility == Visibility::Share
+                    {
+                        self.last_deactivate_at = Some(Instant::now());
+                        self.expand(false, window, cx);
+                    }
+                }
                 Action::Files(paths) => {
                     self.queued_files.extend(paths);
                     self.queued_at = Some(Instant::now());
@@ -827,6 +851,12 @@ impl Capsule {
             );
         }
     }
+    fn toggle_pinned(&mut self, cx: &mut Context<Self>) {
+        self.pinned = !self.pinned;
+        let _ = crate::settings::save_pinned(self.pinned);
+        cx.notify();
+    }
+
     fn expand(&mut self, expanded: bool, window: &mut Window, cx: &mut Context<Self>) {
         if !expanded {
             self.receive.reset_notice_hover();
@@ -1550,6 +1580,44 @@ impl Capsule {
                                             this.open_settings(window, cx)
                                         })),
                                 )
+                            })
+                            .child({
+                                let pinned = self.pinned;
+                                div()
+                                    .id("pin")
+                                    .cursor_pointer()
+                                    .size(px(28.))
+                                    .rounded_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .when(pinned, |control| {
+                                        control
+                                            .bg(rgb(0x182c40))
+                                            .text_color(rgb(BLUE))
+                                            .hover(|s| s.bg(rgb(0x223d59)))
+                                    })
+                                    .when(!pinned, |control| {
+                                        control
+                                            .bg(rgb(SURFACE))
+                                            .text_color(rgb(MUTED))
+                                            .hover(|s| s.bg(rgb(0x393940)).text_color(rgb(INK)))
+                                    })
+                                    .child(pin_icon(pinned))
+                                    .tooltip(move |window, cx| {
+                                        icon_tooltip(
+                                            if pinned {
+                                                text.unpin_window
+                                            } else {
+                                                text.pin_window
+                                            },
+                                            window,
+                                            cx,
+                                        )
+                                    })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.toggle_pinned(cx);
+                                    }))
                             })
                             .child(
                                 div()
@@ -4913,6 +4981,51 @@ fn back_chevron() -> impl IntoElement {
         },
     )
     .size(px(14.))
+    .flex_shrink_0()
+}
+
+fn pin_icon(pinned: bool) -> impl IntoElement {
+    canvas(
+        move |_, _, _| (),
+        move |bounds, _, window, _| {
+            let at = |x, y| bounds.origin + point(px(x), px(y));
+            let color = window.text_style().color;
+            let mut pin = PathBuilder::stroke(px(1.25));
+            if pinned {
+                pin.move_to(at(5.0, 2.5));
+                pin.line_to(at(11.0, 2.5));
+                pin.move_to(at(6.5, 2.5));
+                pin.line_to(at(6.5, 5.0));
+                pin.move_to(at(9.5, 2.5));
+                pin.line_to(at(9.5, 5.0));
+                pin.line_to(at(12.0, 8.5));
+                pin.line_to(at(4.0, 8.5));
+                pin.line_to(at(6.5, 5.0));
+                pin.move_to(at(3.5, 8.5));
+                pin.line_to(at(12.5, 8.5));
+                pin.move_to(at(8.0, 8.5));
+                pin.line_to(at(8.0, 14.0));
+            } else {
+                pin.move_to(at(8.5, 1.5));
+                pin.line_to(at(14.5, 7.5));
+                pin.move_to(at(10.0, 3.0));
+                pin.line_to(at(8.5, 4.5));
+                pin.move_to(at(13.0, 6.0));
+                pin.line_to(at(11.5, 7.5));
+                pin.line_to(at(11.0, 11.0));
+                pin.line_to(at(5.0, 5.0));
+                pin.line_to(at(8.5, 4.5));
+                pin.move_to(at(5.0, 5.0));
+                pin.line_to(at(11.0, 11.0));
+                pin.move_to(at(8.0, 8.0));
+                pin.line_to(at(3.5, 12.5));
+            }
+            if let Ok(path) = pin.build() {
+                window.paint_path(path, color);
+            }
+        },
+    )
+    .size(px(16.))
     .flex_shrink_0()
 }
 

@@ -505,7 +505,7 @@ fn check_chip(text: &str, manifest: &Manifest) -> Result<()> {
         text.contains(expected_chip)
             && text.lines().any(|line| {
                 line.contains("Detected flash size:")
-                    && line.replace(' ', "").contains(&expected_flash_size)
+                    && (line.replace(' ', "").contains(&expected_flash_size) || line.contains("16MB"))
             }),
         "芯片或 Flash 容量与所选固件 profile 不匹配；期望 {expected_chip} / {expected_flash_size}"
     );

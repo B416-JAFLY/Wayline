@@ -264,6 +264,33 @@ pub fn save_notification_duration_seconds_to(path: &Path, seconds: u64) -> Resul
     Ok(seconds)
 }
 
+pub const DEFAULT_PINNED: bool = false;
+
+/// Whether the main window should remain visible when losing focus.
+pub fn load_pinned() -> Result<bool> {
+    load_pinned_from(&settings_path()?)
+}
+
+pub fn load_pinned_from(path: &Path) -> Result<bool> {
+    match read_settings(path)?.get("pinned") {
+        None | Some(Value::Null) => Ok(DEFAULT_PINNED),
+        Some(Value::Bool(pinned)) => Ok(*pinned),
+        _ => Ok(DEFAULT_PINNED),
+    }
+}
+
+pub fn save_pinned(pinned: bool) -> Result<bool> {
+    save_pinned_to(&settings_path()?, pinned)
+}
+
+pub fn save_pinned_to(path: &Path, pinned: bool) -> Result<bool> {
+    let _guard = FileGuard::acquire(&path.with_extension("lock"))?;
+    let mut settings = read_settings(path)?;
+    settings.insert("pinned".into(), Value::Bool(pinned));
+    write_settings(path, &settings)?;
+    Ok(pinned)
+}
+
 /// Whether successful receives should show a desktop notification.
 /// Missing settings preserve the existing enabled behavior.
 pub fn load_desktop_notifications_enabled() -> Result<bool> {

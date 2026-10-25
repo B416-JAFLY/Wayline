@@ -33,6 +33,7 @@ pub enum Action {
     Toggle,
     Show,
     Close,
+    Deactivate,
     Choose,
     Files(Vec<PathBuf>),
     FilesDropped(Vec<PathBuf>),
@@ -887,6 +888,11 @@ unsafe extern "system" fn subclass(
             return LRESULT(isize::from(tx.send(action).is_ok()));
         }
         return LRESULT(0);
+    }
+    if message == WM_ACTIVATE && (wp.0 & 0xffff) == 0 {
+        if let Some(tx) = ACTIONS.get() {
+            let _ = tx.send(Action::Deactivate);
+        }
     }
     let action = match message {
         SHOW_MESSAGE => Some(Action::Show),
