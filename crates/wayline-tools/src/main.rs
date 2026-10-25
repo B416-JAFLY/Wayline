@@ -1,4 +1,9 @@
-use sha2::{Digest, Sha256};
+mod artifacts;
+mod firmware_package;
+mod idf;
+mod packaging;
+mod tool_package;
+mod tui;
 use std::{
     collections::HashSet,
     env, fs,
@@ -8,7 +13,7 @@ use std::{
 
 fn usage() -> ! {
     eprintln!(
-        "usage:\n  wayline-tools host-build [--release] [--test]\n  wayline-tools desktop-build [--release]\n  wayline-tools bridge-build [--release] [--test]\n  wayline-tools firmware-build --target TARGET --output DIR [--idf PATH] [--firmware-dir DIR] [--sdkconfig-defaults VALUE] [--no-component-manager]\n  wayline-tools package-build --input DIR --output DIR --version VERSION\n  wayline-tools package-verify MANIFEST\n  wayline-tools release-verify DIR\n  wayline-tools service-install --binary PATH [--resident]\n  wayline-tools service-uninstall"
+        "usage:\n  wayline-tools tui [--lang zh-CN|en-US] [--preview | --help]\n  wayline-tools host-build [--release] [--test]\n  wayline-tools desktop-build [--release]\n  wayline-tools bridge-build [--release] [--test]\n  wayline-tools firmware-check [--idf PATH] [--python PATH]\n  wayline-tools firmware-build --board BOARD [--output DIR] [--idf PATH] [--python PATH]\n  wayline-tools firmware-build --target TARGET --output DIR [--idf PATH] [--python PATH] [--firmware-dir DIR] [--sdkconfig-defaults VALUE] [--no-component-manager]\n  wayline-tools firmware-package --board BOARD --output DIR [--build-dir DIR]\n  wayline-tools tool-package --output DIR [--platform windows-x64|linux-x64] [--archive FILE] [--cache-dir DIR]\n  wayline-tools package-build --host-dir DIR --board BOARD --output DIR --version VERSION [--firmware-build DIR] [--platform windows-x64|linux-x64] [--esptool-archive FILE] [--wintun-archive FILE] [--cache-dir DIR]\n  wayline-tools package-build --input DIR --output DIR --version VERSION\n  wayline-tools package-verify MANIFEST\n  wayline-tools release-verify DIR\n  wayline-tools service-install --binary PATH [--resident]\n  wayline-tools service-uninstall"
     );
     std::process::exit(2);
 }
@@ -126,8 +131,7 @@ fn package_verify(path: &str) {
 }
 
 fn hash_file(path: &Path) -> Result<String, String> {
-    let bytes = fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    artifacts::sha256(path).map_err(|error| format!("{error:#}"))
 }
 
 fn copy_tree(source: &Path, root: &Path, destination: &Path, files: &mut Vec<serde_json::Value>) {
@@ -185,6 +189,10 @@ fn copy_tree(source: &Path, root: &Path, destination: &Path, files: &mut Vec<ser
 }
 
 fn package_build(args: &[String], root: &Path) {
+    if args.chunks(2).any(|pair| pair[0] == "--host-dir") {
+        finish(packaging::bundle(args, root));
+        return;
+    }
     let mut input = None;
     let mut output = None;
     let mut version = None;
@@ -735,9 +743,11 @@ fn service_uninstall() {
 }
 
 fn firmware_build(args: &[String], root: PathBuf) {
+    let mut board = None;
     let mut target = None;
     let mut output = None;
-    let mut idf = String::from("idf.py");
+    let mut idf_path = None;
+    let mut python = None;
     let mut firmware_dir = root.join("firmware");
     let mut sdkconfig_defaults = None;
     let mut no_component_manager = false;
@@ -752,9 +762,11 @@ fn firmware_build(args: &[String], root: PathBuf) {
             })
         };
         match value {
+            "--board" => board = Some(next(&mut index, "--board", args)),
             "--target" => target = Some(next(&mut index, "--target", args)),
             "--output" => output = Some(PathBuf::from(next(&mut index, "--output", args))),
-            "--idf" => idf = next(&mut index, "--idf", args),
+            "--idf" => idf_path = Some(next(&mut index, "--idf", args)),
+            "--python" => python = Some(next(&mut index, "--python", args)),
             "--firmware-dir" => {
                 firmware_dir = PathBuf::from(next(&mut index, "--firmware-dir", args))
             }
@@ -767,6 +779,24 @@ fn firmware_build(args: &[String], root: PathBuf) {
         index += 1;
     }
 
+    if let Some(board) = board.as_deref() {
+        if target.is_some() || sdkconfig_defaults.is_some() || no_component_manager {
+            eprintln!("--board cannot be combined with --target, --sdkconfig-defaults or --no-component-manager");
+            std::process::exit(2);
+        }
+        let (chip, defaults, headless) =
+            firmware_package::defaults(board).unwrap_or_else(|error| {
+                eprintln!("{error:#}");
+                std::process::exit(2);
+            });
+        target = Some(chip.into());
+        sdkconfig_defaults = Some(defaults.into());
+        no_component_manager = headless;
+        if output.is_none() {
+            output =
+                Some(firmware_package::default_build_dir(&root, board).expect("validated board"));
+        }
+    }
     let target = target.unwrap_or_else(|| {
         eprintln!("--target is required");
         std::process::exit(2);
@@ -797,7 +827,12 @@ fn firmware_build(args: &[String], root: PathBuf) {
         std::process::exit(2);
     }
 
-    let mut command = Command::new(idf);
+    let invocation = idf::Invocation::resolve(idf_path.as_deref(), python.as_deref())
+        .unwrap_or_else(|error| {
+            eprintln!("{error}");
+            std::process::exit(1);
+        });
+    let mut command = invocation.command();
     command
         .current_dir(&root)
         .arg("-C")
@@ -818,7 +853,7 @@ fn firmware_build(args: &[String], root: PathBuf) {
     }
     command.arg("build");
     let status = command.status().unwrap_or_else(|error| {
-        eprintln!("failed to start idf.py: {error}");
+        eprintln!("failed to start {command:?}: {error}\nRun firmware-check in an activated ESP-IDF environment; see docs/DEVELOPMENT.md.");
         std::process::exit(1);
     });
     if !status.success() {
@@ -826,14 +861,43 @@ fn firmware_build(args: &[String], root: PathBuf) {
     }
 }
 
+fn firmware_check(args: &[String]) {
+    let mut idf_path = None;
+    let mut python = None;
+    let mut values = args.iter();
+    while let Some(option) = values.next() {
+        let value = values.next().unwrap_or_else(|| usage());
+        match option.as_str() {
+            "--idf" => idf_path = Some(value.as_str()),
+            "--python" => python = Some(value.as_str()),
+            _ => usage(),
+        }
+    }
+    if let Err(error) = idf::check(idf_path, python) {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
+}
+
+fn finish(result: anyhow::Result<()>) {
+    if let Err(error) = result {
+        eprintln!("{error:#}");
+        std::process::exit(1);
+    }
+}
+
 fn main() {
     let mut args = env::args().skip(1);
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     match args.next().as_deref() {
+        Some("tui") => finish(tui::run(&args.collect::<Vec<_>>(), &root)),
         Some("host-build") => host_build(&args.collect::<Vec<_>>(), root),
         Some("desktop-build") => desktop_build(&args.collect::<Vec<_>>(), root),
         Some("bridge-build") => bridge_build(&args.collect::<Vec<_>>(), root),
+        Some("firmware-check") => firmware_check(&args.collect::<Vec<_>>()),
         Some("firmware-build") => firmware_build(&args.collect::<Vec<_>>(), root),
+        Some("firmware-package") => finish(packaging::firmware(&args.collect::<Vec<_>>(), &root)),
+        Some("tool-package") => finish(packaging::tool(&args.collect::<Vec<_>>(), &root)),
         Some("package-verify") => {
             let Some(path) = args.next() else { usage() };
             if args.next().is_some() {

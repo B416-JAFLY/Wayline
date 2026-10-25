@@ -102,7 +102,7 @@ CLI arguments, JSON output and exit codes are in the
 
 ## Build from source
 
-Prepare the [development environment](docs/DEVELOPMENT.md#build-and-test), then run from the
+Follow the [Windows / Linux setup](docs/SETUP.md) to install native tools, then run from the
 repository root:
 
 ```sh
@@ -112,6 +112,22 @@ cargo run --locked -p wayline-tools -- host-build --release
 This builds the portable host crates. The Windows-only offline package, verified Wintun,
 firmware bundle and service installation remain documented separately in the
 [development guide](docs/DEVELOPMENT.md).
+
+Use the Cargo commands in [unified packaging](docs/PACKAGING.md) to include firmware and flashing tools.
+
+The cross-platform terminal interface provides board selection, host Debug/Release builds,
+packaging, verification and live logs through the same Rust commands:
+
+```sh
+cargo run --locked -p wayline-tools -- tui
+```
+
+Press `L` in the TUI to switch Chinese / English, or add `--lang en-US` to start in English.
+
+Omit `--release` for Debug builds. Host tests do not need ESP-IDF; flashable firmware needs
+ESP-IDF and Rust `esp`, checked with `cargo run --locked -p wayline-tools -- firmware-check`.
+Linux supports shared-library, CLI and firmware development; desktop, Windows services and
+the Wintun bridge are not ported.
 
 ## Source layout
 

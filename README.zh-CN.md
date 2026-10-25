@@ -60,13 +60,24 @@
 
 ## 从源码构建
 
-准备[开发环境](docs/DEVELOPMENT.zh-CN.md#构建与测试)后，从仓库根目录执行：
+按 [Windows / Linux 环境配置](docs/SETUP.zh-CN.md)准备本机工具链后，从仓库根目录执行：
 
 ```sh
 cargo run --locked -p wayline-tools -- host-build --release
 ```
 
 该命令构建可移植的主机 crate。Windows 专用的离线包、Wintun 校验、固件打包和服务安装仍见[开发指南](docs/DEVELOPMENT.zh-CN.md)。
+包含固件和烧录工具的目录包使用[统一构建与打包](docs/PACKAGING.zh-CN.md)中的 Cargo 命令。
+
+也可以用相同入口打开跨平台终端界面，在菜单中选择板型、主机 Debug/Release、构建、打包与校验，并查看实时日志：
+
+```sh
+cargo run --locked -p wayline-tools -- tui
+```
+
+在 TUI 中按 `L` 切换中英文，或添加 `--lang en-US` 直接以英文启动。
+
+去掉 `--release` 构建 Debug 版本。主机测试无需 ESP-IDF；可烧录固件需要 ESP-IDF 和 Rust `esp` 工具链，可用 `cargo run --locked -p wayline-tools -- firmware-check` 检查。Linux 支持共用库、CLI 和固件开发，桌面、Windows 服务与 Wintun 桥接尚未移植。
 
 Windows 主机构建已包含 Rust AWDL 后端。它使用现有 ESP32 固件协议和 Wintun，
 已设为源码及发布包默认，尚待设备互通验收。

@@ -1,0 +1,78 @@
+# 顺序对应固定的任务和配置项；只修改文案，不增删或重排数组。
+actions = [
+    "检查固件环境", "构建主机程序", "构建固件", "打包固件",
+    "打包烧录工具", "组装完整发布包", "校验完整发布包",
+]
+fields = [
+    "板型", "主机模式", "主机构建后测试", "打包平台", "主机产物目录", "固件构建目录",
+    "输出 / 校验目录", "发布版本", "idf.py 路径", "Python 路径", "下载缓存目录",
+    "esptool 离线归档", "Wintun 离线归档",
+]
+hints = [
+    "检查 ESP-IDF / Python / CMake / Ninja / esp 工具链；环境配置见 docs/SETUP.zh-CN.md。",
+    "构建当前系统支持的主机程序；Debug/Release 和主机测试开关在右侧设置。",
+    "按板型构建可烧录固件；需先激活 ESP-IDF。固件优化等级由 sdkconfig 决定。",
+    "从已有固件构建目录生成镜像与校验清单；输出目录必须不存在。",
+    "下载或读取缓存，校验并打包固定版本 esptool；输出目录必须不存在。",
+    "需要已有的主机和固件产物；打包固件、esptool、许可证，Windows 另含 Wintun。",
+    "读取输出目录中的 release.json，核对每个文件的大小、哈希及额外文件。",
+]
+help = """
+Tab 切换面板；↑↓ 选择；Enter 执行或编辑；←→ 切换选项；L 切换中英文。
+PgUp/PgDn 滚动日志；End 跟随；s 保存日志；x 取消；q/Ctrl+C 退出。
+编辑文本时 l/L 正常输入；保存或退出编辑后可切换语言。
+--preview 输出静态界面，不启动任务，也不需要交互终端。默认语言为 zh-CN。
+"""
+
+[ui]
+title = "开发工作台"
+host = "主机"
+tasks = " 任务 · Enter 执行 "
+settings = " 配置 · ←→ 切换 / Enter 编辑 · ↑↓ 更多 "
+command = " 将执行的命令（参数直接传递） "
+logs = "日志"
+following = "跟随"
+browsing = "浏览"
+retained = "保留行数"
+omitted = "省略行数"
+footer = "Tab 面板  ↑↓ 选择  Enter 确认  PgUp/Dn 日志  s 保存  x 取消  q 退出  L 中/EN"
+editor = "Enter 保存 / Esc 放弃 / Ctrl+U 清空"
+resize = "请将终端调整为至少 90×26"
+small_footer = "x 取消 · q 退出 · L 中/EN"
+enabled = "开启"
+disabled = "关闭"
+automatic = "自动"
+default_value = "继承环境 / 默认值"
+log_snapshot = "日志快照 / 状态"
+older_lines = "省略早期行数"
+
+[status]
+idle = "待执行"
+running = "运行中"
+cancelling_quit = "取消并退出中"
+cancelling = "取消中"
+cancelled = "已取消"
+success = "成功 · exit 0"
+failed = "失败"
+error = "执行失败"
+
+[notice]
+navigation = "Tab 切换任务 / 配置 / 日志面板 · L 切换中英文"
+running = "x 取消当前任务；q 取消并退出 · L 切换中英文"
+edit_cancelled = "已放弃编辑"
+updated = "配置已更新，本次会话有效"
+edit_help = "Enter 保存 · Esc 放弃 · Ctrl+U 清空 · l/L 正常输入"
+locked = "运行期间配置已锁定；按 x 取消后可编辑"
+busy = "已有任务运行中；先等待完成或按 x 取消"
+log_saved = "日志已保存"
+preview = "静态预览 · 尚未执行检查或构建"
+
+[error]
+invalid_text = "输入不能包含控制字符，长度不能超过 4096 字节"
+required = "此项不能为空"
+terminal_required = "TUI 需要交互终端；静态预览可使用 tui --preview，自动化请调用原有子命令"
+resolve_root = "解析仓库根目录"
+read_target = "读取 Cargo 产物目录"
+read_target_failed = "读取 Cargo 产物目录失败"
+missing_target = "Cargo 未返回 target_directory"
+initialize_terminal = "初始化终端"

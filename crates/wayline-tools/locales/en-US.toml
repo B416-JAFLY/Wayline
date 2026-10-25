@@ -1,0 +1,78 @@
+# Entries match fixed tasks and settings. Edit text without adding, removing or reordering entries.
+actions = [
+    "Check firmware env", "Build host programs", "Build firmware", "Package firmware",
+    "Package flash tools", "Assemble release", "Verify release",
+]
+fields = [
+    "Board", "Host mode", "Test after host build", "Package platform", "Host artifacts", "Firmware build dir",
+    "Output / verify dir", "Release version", "idf.py path", "Python path", "Download cache",
+    "esptool archive", "Wintun archive",
+]
+hints = [
+    "Check ESP-IDF, Python, CMake, Ninja and esp toolchain. Setup: docs/SETUP.md.",
+    "Build host programs supported on this OS. Set Debug/Release and tests in Settings.",
+    "Build flashable firmware for the board. Activate ESP-IDF first; sdkconfig controls optimization.",
+    "Package existing firmware images and checksums. The output directory must not exist.",
+    "Verify and package pinned esptool from downloads or cache. The output directory must not exist.",
+    "Use existing host and firmware builds; bundle firmware, esptool, licenses, plus Wintun on Windows.",
+    "Check release.json in the output directory: file sizes, hashes and unexpected files.",
+]
+help = """
+Tab switches panes; arrows select; Enter runs or edits; L switches language.
+PgUp/PgDn scroll logs; End follows; s saves logs; x cancels; q/Ctrl+C quits.
+While editing, l/L inserts text; save or leave the editor before switching language.
+--preview renders a static screen without a terminal or running tasks. Default language: zh-CN.
+"""
+
+[ui]
+title = "Build workspace"
+host = "Host"
+tasks = " Tasks · Enter to run "
+settings = " Settings · ←→ Change / Enter Edit · ↑↓ More "
+command = " Command (arguments passed directly) "
+logs = "Logs"
+following = "Following"
+browsing = "Browsing"
+retained = "Retained"
+omitted = "Omitted"
+footer = "Tab Pane  ↑↓ Select  Enter OK  PgUp/Dn Logs  s Save  x Stop  q Quit  L Language"
+editor = "Enter Save / Esc Discard / Ctrl+U Clear"
+resize = "Resize terminal to at least 90×26"
+small_footer = "x Cancel · q Quit · L Language"
+enabled = "On"
+disabled = "Off"
+automatic = "Auto"
+default_value = "Environment / default"
+log_snapshot = "log snapshot / status"
+older_lines = "older lines omitted"
+
+[status]
+idle = "Ready"
+running = "Running"
+cancelling_quit = "Cancelling and quitting"
+cancelling = "Cancelling"
+cancelled = "Cancelled"
+success = "Success · exit 0"
+failed = "Failed"
+error = "Execution failed"
+
+[notice]
+navigation = "Tab switches Tasks / Settings / Logs · L switches language"
+running = "x cancels the task; q cancels and quits · L switches language"
+edit_cancelled = "Edit discarded"
+updated = "Settings updated for this session"
+edit_help = "Enter saves · Esc discards · Ctrl+U clears · l/L inserts text"
+locked = "Settings are locked while running; press x to cancel before editing"
+busy = "A task is already running; wait or press x to cancel"
+log_saved = "Log saved"
+preview = "Static preview · No checks or builds have run"
+
+[error]
+invalid_text = "Input must not contain control characters or exceed 4096 bytes"
+required = "This field is required"
+terminal_required = "TUI requires an interactive terminal; use tui --preview for a static screen or subcommands for automation"
+resolve_root = "Resolve repository root"
+read_target = "Read Cargo target directory"
+read_target_failed = "Failed to read Cargo target directory"
+missing_target = "Cargo did not return target_directory"
+initialize_terminal = "Initialize terminal"

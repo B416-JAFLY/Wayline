@@ -46,6 +46,8 @@ python scripts/preview/render-airdrop-demo.py --direction pc-to-iphone
 
 ## 构建与测试
 
+首次准备本机环境见 [Windows / Linux 环境配置](../docs/SETUP.zh-CN.md)。`cargo run --locked -p wayline-tools -- firmware-check` 检查已安装的固件工具链，不访问设备。
+
 构建、测试、打包和服务管理使用 Rust 工具 `wayline-tools`，详见
 [开发指南](../docs/DEVELOPMENT.zh-CN.md)。新增脚本按用途归入上述目录，共用加载逻辑放入 `lib/`；
 下载依赖、临时文件和生成预览分别放入 `.cache/` 或 `build/`，不纳入版本控制。

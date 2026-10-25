@@ -6,10 +6,16 @@
 
 ## 构建与测试
 
+首次开发先阅读 [Windows / Linux 环境配置](SETUP.zh-CN.md)，其中包含原生安装、环境激活、Debug 产物位置和故障定位。以下构建命令不自动刷写设备或安装服务。
+
+交互开发可运行 `cargo run --locked -p wayline-tools -- tui`，使用菜单执行环境检查、构建、打包与校验。
+界面与脚本调用共用同一套 Rust 子命令，按 `L` 切换中英文；按键与配置见[构建 TUI](PACKAGING.zh-CN.md#构建-tui)。
+
 | 目标 | 依赖 |
 | --- | --- |
 | Windows 应用 | Git、Rust MSVC、Visual Studio C++ Build Tools、Windows SDK（含 `fxc.exe`） |
-| 固件 | ESP-IDF 6.0，以及通过 `espup` 安装的 ESP32-S3 Xtensa 工具链；ESP32-C5 构建另需 RISC-V 目标 |
+| Linux 主机开发 | Rust、C/C++ 编译器、pkg-config、libudev-dev、libssl-dev；桌面和 Windows 服务尚未移植 |
+| 固件 | ESP-IDF 6.0.3，以及通过 `espup` 安装的 Rust `esp` 工具链 |
 
 构建并测试可移植的主机应用：
 
@@ -21,14 +27,15 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo check -p wayline-proto --no-default-features --locked
 ```
 
-如果只需进行不依赖 Wintun、Windows SDK 或服务安装的主机检查，运行
-`cargo run --locked -p wayline-tools -- host-build --test`。非 Windows 系统会构建并测试 CLI 和共用主机 crate；
-Windows 还会加入桥接程序、桌面和服务 crate。加 `--release` 可使用 release profile。
+`cargo run --locked -p wayline-tools -- host-build --test` 在非 Windows 系统构建并测试 CLI 和共用主机 crate；
+Windows 还会加入桥接程序、桌面和服务 crate，因此仍需要 Windows SDK。主机测试不需要 ESP-IDF 或已安装的无线服务。
+不加 `--release` 默认构建 Debug 产物到 `target/debug`，添加后构建到 `target/release`。
 串口诊断在所有平台都必须显式传入 `--port`，或设置 `WAYLINE_SERIAL_PORT`。
 
 固件构建使用 Rust 包装器，并要求已激活 ESP-IDF 环境：
 
 ```sh
+cargo run --locked -p wayline-tools -- firmware-check
 cargo run --locked -p wayline-tools -- firmware-build --target esp32s3 --output firmware/build-rust --sdkconfig-defaults "sdkconfig.defaults;sdkconfig.defaults.cardputer"
 ```
 
@@ -93,15 +100,14 @@ cargo clippy --manifest-path vendor/owly-awdl/Cargo.toml --all-targets --all-fea
 ### 固件构建与刷写
 
 ```sh
-cargo install espup --locked
-espup install --targets esp32s3 --std
-cargo test --locked --manifest-path firmware/Cargo.toml --all-features
+cargo install espup --version 0.17.1 --locked
+espup install --targets esp32s3,esp32c5 --std --toolchain-version 1.97.0.0 --stable-version 1.99.0
 cargo fmt --manifest-path firmware/Cargo.toml -- --check
 cargo test --manifest-path firmware/Cargo.toml --all-features --locked
 cargo clippy --manifest-path firmware/Cargo.toml --all-targets --all-features --locked -- -D warnings
 ```
 
-ESP-IDF 构建需要已激活的 ESP-IDF 6.0 环境，输出为 `firmware/build-rust/owl-radio.bin`，配置保存在 `firmware/sdkconfig.defaults` 和 `firmware/sdkconfig.defaults.cardputer`。
+ESP-IDF 构建需要已激活的 ESP-IDF 6.0.3 环境，输出为 `firmware/build-rust/owl-radio.bin`，配置保存在 `firmware/sdkconfig.defaults` 和 `firmware/sdkconfig.defaults.cardputer`。主机 Cargo 测试不能生成可烧录镜像。`firmware-build` 显式通过所选 Python 启动 `idf.py`；环境检测及 `--idf` / `--python` 覆盖见[环境配置](SETUP.zh-CN.md)。
 
 刷写前退出桌面，停止占用端口的独立服务或监视器。在已激活的 ESP-IDF 终端中，将 COM4 换成实际设备端口：
 
@@ -319,20 +325,20 @@ cargo run -p wayline-service -- --console --data-dir E:\path\to\service-data --p
 ## 离线发布包
 
 从同一检出版本构建主机与固件，再使用新的输出目录。构建和打包不会启动服务、打开端口或刷写设备。
+Windows/Linux 使用相同的 Rust 命令，完整目录结构、离线归档参数和板型限制见[统一构建与打包](PACKAGING.zh-CN.md)。
 
 ```sh
 cargo run --locked -p wayline-tools -- host-build --release
-cargo run --locked -p wayline-tools -- desktop-build --release
-cargo run --locked -p wayline-tools -- bridge-build --test
-cargo run --locked -p wayline-tools -- firmware-build --target esp32s3 --output firmware/build-rust --sdkconfig-defaults "sdkconfig.defaults;sdkconfig.defaults.cardputer"
-cargo run --locked -p wayline-tools -- package-verify path/to/firmware/manifest.json
+cargo run --locked -p wayline-tools -- firmware-build --board cardputer-adv
+cargo run --locked -p wayline-tools -- package-build --host-dir target/release --board cardputer-adv --output dist/wayline --version 0.1.0
+cargo run --locked -p wayline-tools -- release-verify dist/wayline
 ```
 
-Rust 工具现在负责主机、桌面、桥接和固件构建编排、发布目录组装/校验以及 Windows 服务注册。`package-build` 会创建带哈希的 staging 发布目录，`release-verify` 会拒绝缺失、篡改、重复、不安全或未列出的文件。`service-install` 更新服务失败时恢复原配置和运行状态，`service-uninstall` 会先停服再删除。
+`--host-dir` 模式选择主机程序，生成固件清单，校验并打包固定版本烧录工具；Windows 包额外包含 Wintun。`release-verify` 拒绝缺失、篡改、重复、不安全或未列出的文件。原有 `--input` 模式仍仅复制已经准备好的目录。
+
+Windows 服务安装独立执行。`service-install` 更新服务失败时恢复原配置和运行状态，`service-uninstall` 会先停服再删除。
 
 ```sh
-cargo run --locked -p wayline-tools -- package-build --input target/release --output build/release --version 0.1.0
-cargo run --locked -p wayline-tools -- release-verify build/release
 cargo run --locked -p wayline-tools -- service-install --binary "C:/Program Files/wayline/wayline-service.exe" --resident
 cargo run --locked -p wayline-tools -- service-uninstall
 ```

@@ -1,4 +1,4 @@
-//! These commands stop at parsing/help; they never start a service or touch a device.
+//! Commands tested here never start a service or touch a device.
 use std::process::{Command, Stdio};
 
 fn invoke(args: &[&str]) -> std::process::Output {
@@ -92,4 +92,36 @@ fn firmware_info_reports_the_full_command_name() {
         .unwrap();
     assert_eq!(terminal["event"], "result");
     assert_eq!(terminal["data"]["command"], "firmware info");
+}
+
+#[cfg(not(windows))]
+#[test]
+fn wireless_commands_report_unavailable_without_starting_work() {
+    for args in [
+        vec!["discover", "--json"],
+        vec!["send", "--to", "peer", "--json", "--", "missing.txt"],
+        vec!["receive", "--accept-all", "--json"],
+        vec![
+            "radio",
+            "set",
+            "--band",
+            "2.4ghz",
+            "--channel",
+            "6",
+            "--json",
+        ],
+    ] {
+        let output = invoke(&args);
+        assert_eq!(output.status.code(), Some(3));
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let events: Vec<serde_json::Value> = stdout
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["event"], "result");
+        assert_eq!(events[0]["data"]["category"], "unavailable");
+        assert_eq!(events[0]["data"]["ok"], false);
+        assert!(output.stderr.is_empty());
+    }
 }

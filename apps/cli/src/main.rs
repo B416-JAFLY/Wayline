@@ -1,4 +1,8 @@
-use serde_json::{json, Value};
+use serde_json::json;
+#[cfg(windows)]
+use serde_json::Value;
+#[cfg(windows)]
+use std::time::{Duration, Instant};
 use std::{
     env,
     io::IsTerminal,
@@ -8,21 +12,27 @@ use std::{
         mpsc, Arc,
     },
     thread,
-    time::{Duration, Instant},
+};
+#[cfg(windows)]
+use wayline_core::{
+    discover_receivers_live_cancellable, send_to_receiver_cancellable, DiscoveryEvent,
+    NearbyReceiver, SendEvent, SendOptions,
 };
 use wayline_core::{
-    discover_receivers_live_cancellable, send_to_receiver_cancellable, server_config,
-    validate_files, DiscoveryEvent, Identity, NearbyReceiver, NetworkInterface, ReceiverCore,
-    ReceiverEvent, ReceiverOptions, SendCancellation, SendEvent, SendOptions,
+    server_config, validate_files, Identity, NetworkInterface, ReceiverCore, ReceiverEvent,
+    ReceiverOptions, SendCancellation,
 };
+use wayline_service::client::Client;
+#[cfg(windows)]
 use wayline_service::{
-    client::{Client, ClientErrorKind},
+    client::ClientErrorKind,
     session::{ClientLease, SessionKind},
 };
 
 mod args;
 mod consent;
 mod output;
+#[cfg(any(windows, test))]
 mod selection;
 use args::Args;
 use output::{Failure, Output};
@@ -100,6 +110,7 @@ fn run(args: Args, output: Output, signals: &Signals) -> Result<(), Failure> {
             );
             Ok(())
         }
+        #[cfg(windows)]
         "radio set" => {
             let channel = args.channel.expect("validated channel");
             let band = args.band.as_deref().expect("validated band");
@@ -117,10 +128,17 @@ fn run(args: Args, output: Output, signals: &Signals) -> Result<(), Failure> {
                 Ok(())
             })
         }
+        #[cfg(not(windows))]
+        "radio set" => Err(unsupported_wireless()),
         "doctor" => doctor(output),
         "firmware info" => firmware_info(&args, output),
         "firmware flash" => firmware_flash(&args, output, signals),
         "discover" | "send" | "receive" => {
+            // Reject unavailable wireless workflows before loading or creating user identity.
+            #[cfg(not(windows))]
+            if args.command != "receive" || args.bind.is_none() {
+                return Err(unsupported_wireless());
+            }
             if args.command == "send" {
                 validate_files(&args.files).map_err(Failure::policy)?;
             }
@@ -132,28 +150,42 @@ fn run(args: Args, output: Output, signals: &Signals) -> Result<(), Failure> {
             if args.command == "receive" && args.bind.is_some() {
                 return receive(&args, &name, identity, None, output, signals);
             }
-            let kind = match args.command.as_str() {
-                "send" => SessionKind::Send,
-                "receive" => SessionKind::Receive,
-                _ => SessionKind::Client,
-            };
-            let lease = acquire(kind, signals)?;
-            with_lease(lease, output, signals, || {
-                let interface = wait_interface(&args, signals)?;
-                Client::default().firewall(&env::current_exe().map_err(Failure::operation)?)?;
-                match args.command.as_str() {
-                    "receive" => receive(&args, &name, identity, Some(interface), output, signals),
-                    "discover" => {
-                        let receivers = discover(&args, &identity, interface, output, signals)?;
-                        output.event("discoveryCompleted", json!({"receivers":receivers.iter().map(receiver_json).collect::<Vec<_>>(),"count":receivers.len()}));
-                        Ok(())
+            #[cfg(windows)]
+            {
+                let kind = match args.command.as_str() {
+                    "send" => SessionKind::Send,
+                    "receive" => SessionKind::Receive,
+                    _ => SessionKind::Client,
+                };
+                let lease = acquire(kind, signals)?;
+                with_lease(lease, output, signals, || {
+                    let interface = wait_interface(&args, signals)?;
+                    Client::default().firewall(&env::current_exe().map_err(Failure::operation)?)?;
+                    match args.command.as_str() {
+                        "receive" => {
+                            receive(&args, &name, identity, Some(interface), output, signals)
+                        }
+                        "discover" => {
+                            let receivers = discover(&args, &identity, interface, output, signals)?;
+                            output.event("discoveryCompleted", json!({"receivers":receivers.iter().map(receiver_json).collect::<Vec<_>>(),"count":receivers.len()}));
+                            Ok(())
+                        }
+                        _ => send(&args, &name, &identity, interface, output, signals),
                     }
-                    _ => send(&args, &name, &identity, interface, output, signals),
-                }
-            })
+                })
+            }
+            #[cfg(not(windows))]
+            Err(unsupported_wireless())
         }
         _ => Err(Failure::policy("未知命令")),
     }
+}
+
+#[cfg(not(windows))]
+fn unsupported_wireless() -> Failure {
+    Failure::unavailable(
+        "本平台尚未实现 Windows 无线服务适配；可用 receive --bind 进行本地协议验证",
+    )
 }
 
 fn band_for_channel(channel: u16) -> &'static str {
@@ -164,6 +196,7 @@ fn band_for_channel(channel: u16) -> &'static str {
     }
 }
 
+#[cfg(windows)]
 fn wait_radio_ready(signals: &Signals, timeout: Duration) -> Result<(), Failure> {
     let deadline = Instant::now() + timeout;
     loop {
@@ -190,6 +223,7 @@ fn wait_radio_ready(signals: &Signals, timeout: Duration) -> Result<(), Failure>
     }
 }
 
+#[cfg(windows)]
 fn acquire(kind: SessionKind, signals: &Signals) -> Result<ClientLease, Failure> {
     signals.check()?;
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -211,6 +245,7 @@ fn acquire(kind: SessionKind, signals: &Signals) -> Result<ClientLease, Failure>
     }
 }
 
+#[cfg(windows)]
 fn with_lease(
     lease: ClientLease,
     output: Output,
@@ -246,6 +281,7 @@ fn with_lease(
     result
 }
 
+#[cfg(windows)]
 fn wait_interface(args: &Args, signals: &Signals) -> Result<NetworkInterface, Failure> {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
@@ -260,6 +296,7 @@ fn wait_interface(args: &Args, signals: &Signals) -> Result<NetworkInterface, Fa
     }
 }
 
+#[cfg(windows)]
 fn discover(
     args: &Args,
     identity: &Identity,
@@ -298,10 +335,12 @@ fn discover(
     .map_err(Failure::from)
 }
 
+#[cfg(windows)]
 fn receiver_json(receiver: &NearbyReceiver) -> Value {
     json!({"name":receiver.name,"instance":receiver.service.instance,"address":receiver.service.address.to_string(),"flags":receiver.service.flags})
 }
 
+#[cfg(windows)]
 fn send(
     args: &Args,
     name: &str,
