@@ -1,5 +1,6 @@
 //! Hardware integration test. Local TLS file transfer only; never contacts a phone.
 //! Run with OWL + new firmware active. Both screen lanes are queried from the actual MCU.
+#[cfg(windows)]
 use std::{
     fs,
     net::{SocketAddr, TcpListener},
@@ -7,9 +8,12 @@ use std::{
     thread,
     time::Duration,
 };
+#[cfg(windows)]
 use wayline_board::{query, Phase};
+#[cfg(windows)]
 use wayline_core::*;
 
+#[cfg(windows)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     enable_board_feedback();
     if std::env::args().any(|arg| arg == "--failure-cases") {
@@ -123,6 +127,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[cfg(windows)]
 fn failure_cases() -> Result<(), Box<dyn std::error::Error>> {
     for decline in [true, false] {
         let temp = tempfile::tempdir()?;
@@ -216,4 +221,13 @@ fn failure_cases() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     Ok(())
+}
+
+#[cfg(not(windows))]
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "board_loopback requires the Windows board feedback pipe and an attached ESP32",
+    )
+    .into())
 }

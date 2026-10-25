@@ -5,6 +5,10 @@
 default:
     @just --list
 
+# Open the cross-platform build and packaging terminal interface.
+tui:
+    cargo run --locked -p wayline-tools -- tui
+
 # Build the host crates, including the bridge on Windows.
 build-bridge:
     cargo run --locked -p wayline-tools -- host-build
@@ -29,6 +33,18 @@ host-build:
 # Build and test the host crates available on this operating system.
 host-test:
     cargo run --locked -p wayline-tools -- host-build --test
+
+# Check ESP-IDF, Python, CMake, Ninja and the Rust esp toolchain without hardware.
+firmware-check:
+    cargo run --locked -p wayline-tools -- firmware-check
+
+# Build a named board profile using native defaults.
+firmware-board BOARD:
+    cargo run --locked -p wayline-tools -- firmware-build --board "{{BOARD}}"
+
+# Assemble native host executables, firmware and verified flashing tools.
+offline-package BOARD OUTPUT VERSION:
+    cargo run --locked -p wayline-tools -- package-build --host-dir target/release --board "{{BOARD}}" --output "{{OUTPUT}}" --version "{{VERSION}}"
 
 # Build an ESP-IDF firmware profile through the Rust tool wrapper.
 firmware-build TARGET OUTPUT *ARGS:

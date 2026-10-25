@@ -8,10 +8,20 @@ For installation and daily use, see the [quick start](QUICKSTART.md).
 
 ## Build and test
 
+Start with the [Windows / Linux setup](SETUP.md) for native installation,
+environment activation, Debug output paths and troubleshooting. Build commands do not flash
+devices or install services.
+
+For interactive development, run `cargo run --locked -p wayline-tools -- tui` to select
+environment checks, builds, packaging and verification. The UI invokes the same Rust
+subcommands as automation. Press `L` to switch Chinese / English; see the
+[build TUI](PACKAGING.md#build-tui) for controls and settings.
+
 | Target | Requirements |
 | --- | --- |
 | Windows apps | Git, Rust MSVC, Visual Studio C++ Build Tools, Windows SDK including `fxc.exe` |
-| Firmware | ESP-IDF 6.0 and the ESP32-S3 Xtensa toolchain installed with `espup`; the ESP32-C5 build adds its RISC-V target |
+| Linux host development | Rust, C/C++ compiler, pkg-config, libudev-dev, libssl-dev; desktop and Windows services are not ported |
+| Firmware | ESP-IDF 6.0.3 and Rust `esp` installed with `espup` |
 
 Build and test the portable host applications:
 
@@ -23,15 +33,17 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo check -p wayline-proto --no-default-features --locked
 ```
 
-For a portable host check that does not require Wintun, the Windows SDK, or service installation,
-run `cargo run --locked -p wayline-tools -- host-build --test`. On non-Windows
-systems it builds and tests the CLI and shared host crates; Windows also includes the
-bridge, desktop, and service crates. Pass `--release` to use the release profile.
+Run `cargo run --locked -p wayline-tools -- host-build --test` to build and test the CLI and
+shared host crates on non-Windows systems. Windows also includes bridge, desktop and service
+crates and still requires the Windows SDK. Host tests do not need ESP-IDF or an installed
+wireless service. Without `--release`, Debug output goes to `target/debug`; with it, output
+goes to `target/release`.
 Serial diagnostics require an explicit `--port` or `WAYLINE_SERIAL_PORT` on every host.
 
 Firmware builds use the Rust wrapper and an activated ESP-IDF environment:
 
 ```sh
+cargo run --locked -p wayline-tools -- firmware-check
 cargo run --locked -p wayline-tools -- firmware-build --target esp32s3 --output firmware/build-rust --sdkconfig-defaults "sdkconfig.defaults;sdkconfig.defaults.cardputer"
 ```
 
@@ -104,17 +116,19 @@ device validation; host tests do not replace hardware acceptance.
 ### Firmware build and flashing
 
 ```sh
-cargo install espup --locked
-espup install --targets esp32s3 --std
-cargo test --locked --manifest-path firmware/Cargo.toml --all-features
+cargo install espup --version 0.17.1 --locked
+espup install --targets esp32s3,esp32c5 --std --toolchain-version 1.97.0.0 --stable-version 1.99.0
 cargo fmt --manifest-path firmware/Cargo.toml -- --check
 cargo test --manifest-path firmware/Cargo.toml --all-features --locked
 cargo clippy --manifest-path firmware/Cargo.toml --all-targets --all-features --locked -- -D warnings
 ```
 
-The ESP-IDF build requires an activated ESP-IDF 6.0 environment and writes
+The ESP-IDF build requires an activated ESP-IDF 6.0.3 environment and writes
 `firmware/build-rust/owl-radio.bin`.
 Keep configuration in `firmware/sdkconfig.defaults` and `sdkconfig.defaults.cardputer`.
+Host Cargo tests do not generate flashable images. `firmware-build` explicitly launches
+`idf.py` using the selected Python. See [setup](SETUP.md) for environment checks,
+`--idf` / `--python` overrides.
 
 Before flashing, quit desktop and stop any standalone service or monitor holding the port.
 In an activated ESP-IDF terminal, replace COM4 with the actual device port:
@@ -464,24 +478,23 @@ failures. USB identities are not automatically reconciled.
 
 Build matching host and firmware outputs from the same checkout, then use new output directories.
 Builds and packaging do not start services, open ports or flash hardware.
+Windows/Linux use the same Rust commands; see [unified packaging](PACKAGING.md) for layouts,
+offline archives and board limitations.
 
 ```sh
 cargo run --locked -p wayline-tools -- host-build --release
-cargo run --locked -p wayline-tools -- desktop-build --release
-cargo run --locked -p wayline-tools -- bridge-build --test
-cargo run --locked -p wayline-tools -- firmware-build --target esp32s3 --output firmware/build-rust --sdkconfig-defaults "sdkconfig.defaults;sdkconfig.defaults.cardputer"
-cargo run --locked -p wayline-tools -- package-verify path/to/firmware/manifest.json
+cargo run --locked -p wayline-tools -- firmware-build --board cardputer-adv
+cargo run --locked -p wayline-tools -- package-build --host-dir target/release --board cardputer-adv --output dist/wayline --version 0.1.0
+cargo run --locked -p wayline-tools -- release-verify dist/wayline
 ```
 
-The Rust tool now owns host, desktop, bridge and firmware build orchestration, release-tree
-assembly/verification, and Windows service registration. `package-build` creates a staged,
-hashed release tree; `release-verify` rejects missing, modified, duplicate, unsafe or unlisted
-files. `service-install` updates an existing service transactionally and restores its previous
-configuration/state if startup fails; `service-uninstall` stops before removal.
+The `--host-dir` mode selects host executables, generates firmware manifests, and verifies and
+bundles pinned flashing tools; Windows packages also include Wintun. `release-verify` rejects
+missing, modified, duplicate, unsafe or unlisted files. The original `--input` mode only copies
+an already assembled directory. Windows service installation is separate; `service-install`
+restores previous configuration/state if startup fails, and `service-uninstall` stops before removal.
 
 ```sh
-cargo run --locked -p wayline-tools -- package-build --input target/release --output build/release --version 0.1.0
-cargo run --locked -p wayline-tools -- release-verify build/release
 cargo run --locked -p wayline-tools -- service-install --binary "C:/Program Files/wayline/wayline-service.exe" --resident
 cargo run --locked -p wayline-tools -- service-uninstall
 ```
