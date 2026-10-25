@@ -17,6 +17,9 @@ request, and its raw transmit rate is fixed to HE20/MCS0. C5 AirDrop interoperab
 throughput still need device validation. See the
 [development guide](docs/DEVELOPMENT.md#headless-esp32-c5-build) for building and flashing it.
 
+S3 profiles use an 8 MiB image and partition layout on both 8 MiB and 16 MiB boards;
+the extra capacity is unused, and 4 MiB boards are not supported by these profiles.
+
 [中文说明](README.zh-CN.md) · [Quick start](docs/QUICKSTART.md) · [Development guide](docs/DEVELOPMENT.md)
 
 [![Watch on YouTube](https://img.youtube.com/vi/8IJywijJMYU/hqdefault.jpg)](https://www.youtube.com/watch?v=8IJywijJMYU)
@@ -91,6 +94,9 @@ Before updating, finish transfers, quit Wayline from the tray, and close CLI com
   Japanese, Korean, French, German and Spanish. The choice is saved locally and updates the
   tray, system dialogs and Explorer entries.
 - Uploading to 100% still requires receiver confirmation. Delivered means sending succeeded.
+- Pin keeps the sharing card visible when it loses focus. Settings controls drag activation
+  and opening the received file's location after success; both are enabled by default.
+  Preference errors are shown on the card, and failed saves keep the previous value.
 - × or Esc hides the card while receiving continues. Tray Quit or `Ctrl+Q` ends this client's
   tasks; the service stays active while another CLI session uses it.
 

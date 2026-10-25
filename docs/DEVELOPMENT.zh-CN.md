@@ -125,7 +125,7 @@ idf.py -C firmware -B firmware/build-rust-esp32s3-headless -D IDF_TARGET=esp32s3
 idf.py -C firmware -B firmware/build-rust-esp32s3-headless-usb -D IDF_TARGET=esp32s3 build
 ```
 
-默认 C5 镜像使用 USB-UART 桥接 UART0，输出到 `firmware/build-rust-esp32c5/`；加 `-C5NativeUsb` 构建原生 USB Serial/JTAG profile，输出到 `firmware/build-rust-esp32c5-usb/`。`-S3Headless` 构建关闭 M5Unified/Cardputer UI，输出 UART0 profile；加 `-S3NativeUsb` 构建无屏原生 USB profile。无屏 S3 profile 目前固定为 8 MiB Flash；4 MiB S3 设备不匹配此镜像。所有无屏构建关闭组件管理，ESP32-S3 的 `firmware/dependencies.lock` 保持不变。Desktop 离线包包含 Cardputer、无屏 S3 UART0/Native USB、C5 UART0/Native USB 五个 profile，设备固件页会按端口 USB 接口类型筛选。
+默认 C5 镜像使用 USB-UART 桥接 UART0，输出到 `firmware/build-rust-esp32c5/`；加 `-C5NativeUsb` 构建原生 USB Serial/JTAG profile，输出到 `firmware/build-rust-esp32c5-usb/`。`-S3Headless` 构建关闭 M5Unified/Cardputer UI，输出 UART0 profile；加 `-S3NativeUsb` 构建无屏原生 USB profile。无屏 S3 profile 的镜像头、清单和分区布局统一为 8 MiB，可安装到 8 MiB 或 16 MiB S3，额外 Flash 容量不使用；4 MiB S3 设备不匹配此镜像。所有无屏构建关闭组件管理，ESP32-S3 的 `firmware/dependencies.lock` 保持不变。Desktop 离线包包含 Cardputer、无屏 S3 UART0/Native USB、C5 UART0/Native USB 五个 profile，设备固件页会按端口 USB 接口类型筛选。
 
 ```sh
 $fw = (Resolve-Path firmware).Path
@@ -150,6 +150,8 @@ cargo run --locked -p wayline-radio -- COM4 hello
 | `--version` | 输出版本，不初始化 GPUI 或服务 |
 
 名称、接收目录、界面语言和身份保存在 `%LOCALAPPDATA%\wayline`。`desktop.json` 在进程锁下原子写入并保留未知设置；身份创建和 `receiver-services.json` 中的广播更名记录也受锁保护。`download_directory` 默认指向 Downloads/Wayline，更改时不移动已有文件，接收期间禁止更改。`language` 保存 `zh-CN`、`zh-TW`、`en-US`、`ja-JP`、`ko-KR`、`fr-FR`、`de-DE` 或 `es-ES`；缺少该字段时按 Windows 界面语言选择，不支持的系统语言回退到 English。`desktop_notifications_enabled` 控制是否显示独立桌面接收通知，默认开启；`notification_position` 支持左上、上中、右上、左下、下中、右下，默认 `top-right`；`notification_duration_seconds` 允许 3、5、8、10、15 或 30 秒，默认 8 秒。通知使用淡入淡出过渡。切换语言会立即更新窗口、托盘、系统对话框和通知，并重新注册资源管理器入口。界面文案位于 `apps/desktop/locales/*.toml`（当前 8 种语言），`apps/desktop/build.rs` 在构建时校验所有语言的键集合与占位符并生成静态文案表；新增语言时需要同时添加 TOML、`Language` 枚举项和 `build.rs` 构建列表，并保持全部翻译完整。共享模块（传输、烧录和本地设置校验）的底层错误详情仍按原文显示。完整接收错误写入 `desktop-receiver.log`。
+
+`pinned` 默认 `false`，开启后分享卡片失去焦点时仍保持显示。`drag_activate` 和 `auto_open_download_dir` 默认 `true`，分别控制拖动时显示投放入口、确认接收成功后打开第一个文件的位置。缺失或 `null` 使用默认值，其他非布尔值报错；读取失败会在卡片中提示，保存失败保留内存中的原值。
 
 活动发送与接收卡片按进度事件显示平滑速度，进度停滞一秒后速度归零。耗时从首个 `Uploading` 或 `Receiving` 事件（包括零字节事件）开始计算，持续到最终确认，排除准备和等待接受的时间。历史平均速度使用传输流字节数除以这一耗时。分享卡片顶部提供设备固件和最近传输图标入口。
 

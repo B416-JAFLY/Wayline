@@ -264,6 +264,87 @@ pub fn save_notification_duration_seconds_to(path: &Path, seconds: u64) -> Resul
     Ok(seconds)
 }
 
+pub const DEFAULT_DRAG_ACTIVATE: bool = true;
+
+/// Whether dragging files should automatically reveal the sharing capsule.
+pub fn load_drag_activate() -> Result<bool> {
+    load_drag_activate_from(&settings_path()?)
+}
+
+pub fn load_drag_activate_from(path: &Path) -> Result<bool> {
+    match read_settings(path)?.get("drag_activate") {
+        None | Some(Value::Null) => Ok(DEFAULT_DRAG_ACTIVATE),
+        Some(Value::Bool(enabled)) => Ok(*enabled),
+        _ => bail!("drag_activate 设置必须是布尔值"),
+    }
+}
+
+pub fn save_drag_activate(enabled: bool) -> Result<bool> {
+    save_drag_activate_to(&settings_path()?, enabled)
+}
+
+pub fn save_drag_activate_to(path: &Path, enabled: bool) -> Result<bool> {
+    let _guard = FileGuard::acquire(&path.with_extension("lock"))?;
+    let mut settings = read_settings(path)?;
+    settings.insert("drag_activate".into(), Value::Bool(enabled));
+    write_settings(path, &settings)?;
+    Ok(enabled)
+}
+
+pub const DEFAULT_AUTO_OPEN_DOWNLOAD_DIR: bool = true;
+
+/// Whether receiving files successfully should automatically open the containing folder.
+pub fn load_auto_open_download_dir() -> Result<bool> {
+    load_auto_open_download_dir_from(&settings_path()?)
+}
+
+pub fn load_auto_open_download_dir_from(path: &Path) -> Result<bool> {
+    match read_settings(path)?.get("auto_open_download_dir") {
+        None | Some(Value::Null) => Ok(DEFAULT_AUTO_OPEN_DOWNLOAD_DIR),
+        Some(Value::Bool(enabled)) => Ok(*enabled),
+        _ => bail!("auto_open_download_dir 设置必须是布尔值"),
+    }
+}
+
+pub fn save_auto_open_download_dir(enabled: bool) -> Result<bool> {
+    save_auto_open_download_dir_to(&settings_path()?, enabled)
+}
+
+pub fn save_auto_open_download_dir_to(path: &Path, enabled: bool) -> Result<bool> {
+    let _guard = FileGuard::acquire(&path.with_extension("lock"))?;
+    let mut settings = read_settings(path)?;
+    settings.insert("auto_open_download_dir".into(), Value::Bool(enabled));
+    write_settings(path, &settings)?;
+    Ok(enabled)
+}
+
+pub const DEFAULT_PINNED: bool = false;
+
+/// Whether the main window should remain visible when losing focus.
+pub fn load_pinned() -> Result<bool> {
+    load_pinned_from(&settings_path()?)
+}
+
+pub fn load_pinned_from(path: &Path) -> Result<bool> {
+    match read_settings(path)?.get("pinned") {
+        None | Some(Value::Null) => Ok(DEFAULT_PINNED),
+        Some(Value::Bool(pinned)) => Ok(*pinned),
+        _ => bail!("pinned 设置必须是布尔值"),
+    }
+}
+
+pub fn save_pinned(pinned: bool) -> Result<bool> {
+    save_pinned_to(&settings_path()?, pinned)
+}
+
+pub fn save_pinned_to(path: &Path, pinned: bool) -> Result<bool> {
+    let _guard = FileGuard::acquire(&path.with_extension("lock"))?;
+    let mut settings = read_settings(path)?;
+    settings.insert("pinned".into(), Value::Bool(pinned));
+    write_settings(path, &settings)?;
+    Ok(pinned)
+}
+
 /// Whether successful receives should show a desktop notification.
 /// Missing settings preserve the existing enabled behavior.
 pub fn load_desktop_notifications_enabled() -> Result<bool> {
@@ -811,6 +892,56 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn desktop_behavior_preferences_validate_types_and_preserve_settings() {
+        for (key, default, load, save) in [
+            (
+                "drag_activate",
+                DEFAULT_DRAG_ACTIVATE,
+                load_drag_activate_from as fn(&Path) -> Result<bool>,
+                save_drag_activate_to as fn(&Path, bool) -> Result<bool>,
+            ),
+            (
+                "auto_open_download_dir",
+                DEFAULT_AUTO_OPEN_DOWNLOAD_DIR,
+                load_auto_open_download_dir_from,
+                save_auto_open_download_dir_to,
+            ),
+            ("pinned", DEFAULT_PINNED, load_pinned_from, save_pinned_to),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("desktop.json");
+            assert_eq!(load(&path).unwrap(), default);
+            assert!(!path.exists());
+            fs::write(
+                &path,
+                serde_json::to_vec(&serde_json::json!({key: null, "future": 7})).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(load(&path).unwrap(), default);
+            for enabled in [false, true] {
+                assert_eq!(save(&path, enabled).unwrap(), enabled);
+                assert_eq!(load(&path).unwrap(), enabled);
+                assert_eq!(read_settings(&path).unwrap()["future"], 7);
+            }
+            for invalid in [
+                serde_json::json!("false"),
+                serde_json::json!(0),
+                serde_json::json!([]),
+                serde_json::json!({}),
+            ] {
+                let bytes = serde_json::to_vec(&serde_json::json!({key: invalid})).unwrap();
+                fs::write(&path, &bytes).unwrap();
+                assert!(load(&path).is_err(), "{key} must reject invalid types");
+                assert_eq!(fs::read(&path).unwrap(), bytes);
+            }
+            fs::write(&path, b"{").unwrap();
+            assert!(load(&path).is_err());
+            assert!(save(&path, !default).is_err());
+            assert_eq!(fs::read(&path).unwrap(), b"{");
+        }
+    }
+
     #[test]
     fn saves_preserve_unknown_settings_and_corruption() {
         let dir = tempfile::tempdir().unwrap();

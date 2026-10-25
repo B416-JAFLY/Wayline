@@ -500,14 +500,33 @@ fn chip_label(chip: &str) -> Result<&'static str> {
 
 fn check_chip(text: &str, manifest: &Manifest) -> Result<()> {
     let expected_chip = chip_label(&manifest.chip)?;
-    let expected_flash_size = format!("{}MB", manifest.flash_size / (1024 * 1024));
     ensure!(
-        text.contains(expected_chip)
-            && text.lines().any(|line| {
-                line.contains("Detected flash size:")
-                    && line.replace(' ', "").contains(&expected_flash_size)
-            }),
-        "芯片或 Flash 容量与所选固件 profile 不匹配；期望 {expected_chip} / {expected_flash_size}"
+        text.split(|c: char| !c.is_ascii_alphanumeric() && c != '-')
+            .any(|word| word == expected_chip),
+        "芯片与所选固件 profile 不匹配；期望 {expected_chip}"
+    );
+    let mut sizes = text
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("Detected flash size:"));
+    let size = sizes.next().context("无法读取设备 Flash 容量")?;
+    ensure!(sizes.next().is_none(), "烧录工具返回了多条 Flash 容量");
+    let size: String = size.split_whitespace().collect();
+    let detected_bytes = size
+        .strip_suffix("MB")
+        .context("无法识别设备 Flash 容量单位")?
+        .parse::<u64>()
+        .context("无法识别设备 Flash 容量数值")?
+        .checked_mul(1024 * 1024)
+        .context("设备 Flash 容量溢出")?;
+    // Keep the S3 image header and partition layout at 8 MiB on both 8/16 MiB
+    // boards. Larger physical capacity does not change the package layout.
+    let compatible_s3 = manifest.chip == "esp32s3"
+        && manifest.flash_size == FLASH_SIZE
+        && detected_bytes == 16 * 1024 * 1024;
+    ensure!(
+        detected_bytes == manifest.flash_size || compatible_s3,
+        "Flash 容量与所选固件 profile 不匹配；镜像 {}MB，设备 {size}",
+        manifest.flash_size / (1024 * 1024)
     );
     Ok(())
 }
@@ -979,6 +998,48 @@ mod tests {
             assert!(validate_port(port).is_err());
         }
         assert!(validate_port("COM4").is_ok());
+    }
+
+    #[test]
+    fn flash_capacity_is_exact_and_s3_16_mib_uses_the_8_mib_image() {
+        let (_, _, s3) = package::tests::fixture();
+        let (_, _, c5) = package::tests::c5_fixture(C5_UART_BOARD);
+        for size in ["8MB", "16MB", "16 MB"] {
+            assert!(
+                check_chip(
+                    &format!("Chip is ESP32-S3\nDetected flash size: {size}"),
+                    &s3
+                )
+                .is_ok()
+            );
+        }
+        for size in [
+            "4MB",
+            "18MB",
+            "116MB",
+            "16MB garbage",
+            "0MB",
+            "16KB",
+            "unknown",
+        ] {
+            assert!(
+                check_chip(
+                    &format!("Chip is ESP32-S3\nDetected flash size: {size}"),
+                    &s3
+                )
+                .is_err(),
+                "invalid capacity {size}"
+            );
+        }
+        assert!(check_chip("Chip is ESP32-S30\nDetected flash size: 8MB", &s3).is_err());
+        assert!(
+            check_chip(
+                "Chip is ESP32-S3\nDetected flash size: 8MB\nDetected flash size: 4MB",
+                &s3
+            )
+            .is_err()
+        );
+        assert!(check_chip("Chip is ESP32-C5\nDetected flash size: 16MB", &c5).is_err());
     }
 
     #[test]

@@ -84,6 +84,11 @@ pub struct Capsule {
     opening_files: Option<u64>,
     queued_files: Vec<PathBuf>,
     queued_at: Option<Instant>,
+    pinned: bool,
+    last_deactivate_at: Option<Instant>,
+    auto_open_download_dir: bool,
+    drag_activate: bool,
+    drag_active: bool,
 }
 
 impl Capsule {
@@ -148,6 +153,33 @@ impl Capsule {
                 None
             }
         };
+        let mut load_preference = |result: anyhow::Result<bool>, default, label| {
+            result.unwrap_or_else(|error| {
+                let message = format!("{}{label}: {error:#}", text.err_behavior_setting_load);
+                if let Some(previous) = &mut settings_error {
+                    previous.push('\n');
+                    previous.push_str(&message);
+                } else {
+                    settings_error = Some(message);
+                }
+                default
+            })
+        };
+        let auto_open_download_dir = load_preference(
+            crate::settings::load_auto_open_download_dir(),
+            crate::settings::DEFAULT_AUTO_OPEN_DOWNLOAD_DIR,
+            text.auto_open_download_dir,
+        );
+        let pinned = load_preference(
+            crate::settings::load_pinned(),
+            crate::settings::DEFAULT_PINNED,
+            text.pin_window,
+        );
+        let drag_activate = load_preference(
+            crate::settings::load_drag_activate(),
+            crate::settings::DEFAULT_DRAG_ACTIVATE,
+            text.drag_activate,
+        );
         let (tx, rx) = mpsc::channel();
         let (history_worker, history_thread) = crate::history::StoreWorker::start(tx.clone());
         let (action_tx, actions) = mpsc::channel();
@@ -237,6 +269,11 @@ impl Capsule {
             opening_files: None,
             queued_files: Vec::new(),
             queued_at: None,
+            pinned,
+            last_deactivate_at: None,
+            auto_open_download_dir,
+            drag_activate,
+            drag_active: false,
         }
     }
 
@@ -305,7 +342,7 @@ impl Capsule {
                             && let Some(record) = record
                             && let Some(worker) = &self.history_worker
                         {
-                            worker.append(record, received_files);
+                            worker.append(record, received_files.clone());
                         }
                     }
                     Event::HistoryUpdated(Err(error)) => {
@@ -542,6 +579,12 @@ impl Capsule {
                         _ => Vec::new(),
                     };
                     let applied = self.receive.apply_at(&event, event_at, event_unix_ms);
+                    let open_location = crate::receiving::auto_open_location(
+                        &event,
+                        applied,
+                        self.auto_open_download_dir,
+                        self.download_directory.as_deref(),
+                    );
                     if applied
                         && let Some(record) = record
                         && let Some(worker) = &self.history_worker
@@ -557,6 +600,9 @@ impl Capsule {
                             notice.full_text.clone(),
                             cx,
                         );
+                    }
+                    if let Some(target) = open_location {
+                        self.open_history_folder(target, cx);
                     }
                     changed |= applied;
                     continue;
@@ -602,9 +648,28 @@ impl Capsule {
         }
         for action in actions {
             match action {
-                Action::Toggle => self.expand(self.visibility != Visibility::Share, window, cx),
+                Action::Toggle => {
+                    let just_deactivated = self
+                        .last_deactivate_at
+                        .take()
+                        .is_some_and(|at| at.elapsed() < Duration::from_millis(350));
+                    if !just_deactivated {
+                        self.expand(self.visibility != Visibility::Share, window, cx);
+                    }
+                }
                 Action::Show => self.expand(true, window, cx),
                 Action::Close => self.expand(false, window, cx),
+                Action::Deactivate => {
+                    let interacting = self.picker_open
+                        || self.incoming.is_some()
+                        || self.firmware.busy
+                        || self.drag_active
+                        || self.drop_hovered;
+                    if self.visibility.hide_on_deactivate(self.pinned, interacting) {
+                        self.last_deactivate_at = Some(Instant::now());
+                        self.expand(false, window, cx);
+                    }
+                }
                 Action::Files(paths) => {
                     self.queued_files.extend(paths);
                     self.queued_at = Some(Instant::now());
@@ -676,10 +741,11 @@ impl Capsule {
                     changed = true;
                 }
                 Action::FileDrag(active) => {
+                    self.drag_active = active;
                     if !self.model.phase.busy() && !self.picker_open && self.name_input.is_none()
                         || !active
                     {
-                        self.visibility.file_drag(active);
+                        self.visibility.file_drag(active, self.drag_activate);
                         self.place();
                         changed = true;
                     }
@@ -827,6 +893,46 @@ impl Capsule {
             );
         }
     }
+    fn toggle_auto_open_download_dir(&mut self, cx: &mut Context<Self>) {
+        let result = crate::settings::toggle(
+            &mut self.auto_open_download_dir,
+            crate::settings::save_auto_open_download_dir,
+        );
+        let text = self.language.strings();
+        self.settings_error = result.err().map(|error| {
+            format!(
+                "{}{}: {error:#}",
+                text.err_behavior_setting_save, text.auto_open_download_dir
+            )
+        });
+        cx.notify();
+    }
+
+    fn toggle_pinned(&mut self, cx: &mut Context<Self>) {
+        let result = crate::settings::toggle(&mut self.pinned, crate::settings::save_pinned);
+        let text = self.language.strings();
+        self.settings_error = result.err().map(|error| {
+            format!(
+                "{}{}: {error:#}",
+                text.err_behavior_setting_save, text.pin_window
+            )
+        });
+        cx.notify();
+    }
+
+    fn toggle_drag_activate(&mut self, cx: &mut Context<Self>) {
+        let result =
+            crate::settings::toggle(&mut self.drag_activate, crate::settings::save_drag_activate);
+        let text = self.language.strings();
+        self.settings_error = result.err().map(|error| {
+            format!(
+                "{}{}: {error:#}",
+                text.err_behavior_setting_save, text.drag_activate
+            )
+        });
+        cx.notify();
+    }
+
     fn expand(&mut self, expanded: bool, window: &mut Window, cx: &mut Context<Self>) {
         if !expanded {
             self.receive.reset_notice_hover();
@@ -1098,6 +1204,7 @@ impl Capsule {
         if paths.is_empty() {
             return;
         }
+        self.drag_active = false;
         self.expand(true, window, cx);
         if self.firmware.busy || self.model.phase.busy() {
             self.model.error = Some(self.language.strings().busy_device_add_files.into());
@@ -1306,7 +1413,7 @@ impl Capsule {
         }
     }
 
-    fn pill(&self) -> AnyElement {
+    fn pill(&self, cx: &mut Context<Self>) -> AnyElement {
         let text = self.language.strings();
         let subtitle = if self.model.phase.busy() {
             self.model.phase.title(self.language)
@@ -1327,6 +1434,8 @@ impl Capsule {
             .items_center()
             .px(px(16.))
             .gap(px(12.))
+            .cursor_pointer()
+            .on_click(cx.listener(|this, _, window, cx| this.expand(true, window, cx)))
             .when(self.drop_hovered, |pill| {
                 pill.bg(rgb(0x163353)).border_color(rgb(BLUE))
             })
@@ -1551,6 +1660,44 @@ impl Capsule {
                                         })),
                                 )
                             })
+                            .child({
+                                let pinned = self.pinned;
+                                div()
+                                    .id("pin")
+                                    .cursor_pointer()
+                                    .size(px(28.))
+                                    .rounded_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .when(pinned, |control| {
+                                        control
+                                            .bg(rgb(0x182c40))
+                                            .text_color(rgb(BLUE))
+                                            .hover(|s| s.bg(rgb(0x223d59)))
+                                    })
+                                    .when(!pinned, |control| {
+                                        control
+                                            .bg(rgb(SURFACE))
+                                            .text_color(rgb(MUTED))
+                                            .hover(|s| s.bg(rgb(0x393940)).text_color(rgb(INK)))
+                                    })
+                                    .child(pin_icon(pinned))
+                                    .tooltip(move |window, cx| {
+                                        icon_tooltip(
+                                            if pinned {
+                                                text.unpin_window
+                                            } else {
+                                                text.pin_window
+                                            },
+                                            window,
+                                            cx,
+                                        )
+                                    })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.toggle_pinned(cx);
+                                    }))
+                            })
                             .child(
                                 div()
                                     .id("close")
@@ -1570,6 +1717,11 @@ impl Capsule {
                                     })),
                             ),
                     ),
+            )
+            .children(
+                self.settings_error
+                    .as_ref()
+                    .map(|error| self.error_view(error)),
             )
             .child(
                 div()
@@ -2961,6 +3113,16 @@ impl Capsule {
                             )
                         })),
                     )
+                    .child(
+                        checkbox(
+                            "drag-activate-enabled",
+                            text.drag_activate,
+                            self.drag_activate,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.toggle_drag_activate(cx);
+                        })),
+                    )
                     .child(div().text_size(px(13.)).child(text.notice_position_title))
                     .child(self.notification_position_select(cx))
                     .child(div().text_size(px(13.)).child(text.notice_duration_title))
@@ -3158,11 +3320,6 @@ impl Capsule {
                     },
                 ))
             })
-            .children(
-                self.settings_error
-                    .as_ref()
-                    .map(|error| self.error_view(error)),
-            )
             .child(
                 div()
                     .flex_shrink_0()
@@ -3212,6 +3369,16 @@ impl Capsule {
                             button.opacity(0.4)
                         })
                         .on_click(cx.listener(|this, _, _, cx| this.choose_download_directory(cx))),
+                    )
+                    .child(
+                        checkbox(
+                            "auto-open-download-dir",
+                            text.auto_open_download_dir,
+                            self.auto_open_download_dir,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.toggle_auto_open_download_dir(cx);
+                        })),
                     )
                     .when(self.receive.active.is_some(), |card| {
                         card.child(
@@ -4727,7 +4894,7 @@ impl Render for Capsule {
             } else if self.visibility == Visibility::Share {
                 self.panel(cx)
             } else {
-                self.pill()
+                self.pill(cx)
             })
     }
 }
@@ -4913,6 +5080,51 @@ fn back_chevron() -> impl IntoElement {
         },
     )
     .size(px(14.))
+    .flex_shrink_0()
+}
+
+fn pin_icon(pinned: bool) -> impl IntoElement {
+    canvas(
+        move |_, _, _| (),
+        move |bounds, _, window, _| {
+            let at = |x, y| bounds.origin + point(px(x), px(y));
+            let color = window.text_style().color;
+            let mut pin = PathBuilder::stroke(px(1.25));
+            if pinned {
+                pin.move_to(at(5.0, 2.5));
+                pin.line_to(at(11.0, 2.5));
+                pin.move_to(at(6.5, 2.5));
+                pin.line_to(at(6.5, 5.0));
+                pin.move_to(at(9.5, 2.5));
+                pin.line_to(at(9.5, 5.0));
+                pin.line_to(at(12.0, 8.5));
+                pin.line_to(at(4.0, 8.5));
+                pin.line_to(at(6.5, 5.0));
+                pin.move_to(at(3.5, 8.5));
+                pin.line_to(at(12.5, 8.5));
+                pin.move_to(at(8.0, 8.5));
+                pin.line_to(at(8.0, 14.0));
+            } else {
+                pin.move_to(at(8.5, 1.5));
+                pin.line_to(at(14.5, 7.5));
+                pin.move_to(at(10.0, 3.0));
+                pin.line_to(at(8.5, 4.5));
+                pin.move_to(at(13.0, 6.0));
+                pin.line_to(at(11.5, 7.5));
+                pin.line_to(at(11.0, 11.0));
+                pin.line_to(at(5.0, 5.0));
+                pin.line_to(at(8.5, 4.5));
+                pin.move_to(at(5.0, 5.0));
+                pin.line_to(at(11.0, 11.0));
+                pin.move_to(at(8.0, 8.0));
+                pin.line_to(at(3.5, 12.5));
+            }
+            if let Ok(path) = pin.build() {
+                window.paint_path(path, color);
+            }
+        },
+    )
+    .size(px(16.))
     .flex_shrink_0()
 }
 

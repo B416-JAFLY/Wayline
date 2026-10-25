@@ -283,6 +283,14 @@ pub fn validate_package(path: &Path) -> Result<ValidatedPackage> {
                     && u16::from_le_bytes([header[12], header[13]]) == profile.image_chip_id,
                 "镜像头与固件 profile 不匹配"
             );
+            // esptool keeps the image header during flashing. A larger header
+            // capacity must not be hidden behind a smaller package manifest.
+            let image_capacity = 1u64 << (20 + (header[3] >> 4));
+            ensure!(
+                image_capacity == manifest.flash_size,
+                "镜像头 Flash 容量与固件包清单不匹配：{}",
+                image.path
+            );
         }
         paths.push(full);
     }
@@ -391,9 +399,11 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut boot = vec![0; 4096];
         boot[0] = 0xe9;
+        boot[3] = 0x30;
         boot[12] = 9;
         let mut app = vec![0; 8192];
         app[0] = 0xe9;
+        app[3] = 0x30;
         app[12] = 9;
         let mut table = vec![0xff; 3072];
         for (slot, kind, subtype, offset, length, name) in [
@@ -457,6 +467,7 @@ pub(crate) mod tests {
             let image_path = dir.path().join(&manifest.images[index].path);
             let mut bytes = fs::read(&image_path).unwrap();
             bytes[12] = 0x17;
+            bytes[3] = 0x10;
             fs::write(&image_path, bytes).unwrap();
             manifest.images[index].sha256 = hash_file(&image_path).unwrap();
         }
@@ -473,6 +484,20 @@ pub(crate) mod tests {
     fn save(path: &Path, manifest: &Manifest) {
         fs::write(path, serde_json::to_vec(manifest).unwrap()).unwrap();
     }
+    #[test]
+    fn image_flash_capacity_must_match_manifest_even_with_valid_hashes() {
+        for image_index in [0, 2] {
+            let (dir, path, mut manifest) = fixture();
+            let image_path = dir.path().join(&manifest.images[image_index].path);
+            let mut bytes = fs::read(&image_path).unwrap();
+            bytes[3] = 0x40; // 16 MiB image, while the package promises 8 MiB.
+            fs::write(&image_path, bytes).unwrap();
+            manifest.images[image_index].sha256 = hash_file(&image_path).unwrap();
+            save(&path, &manifest);
+            assert!(validate_package(&path).is_err());
+        }
+    }
+
     #[test]
     fn complete_package_keeps_three_images_outside_nvs() {
         let (_dir, path, _) = fixture();
